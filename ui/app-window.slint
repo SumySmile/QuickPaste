@@ -1,0 +1,1162 @@
+import { ScrollView } from "std-widgets.slint";
+
+export enum ActiveView { home, settings }
+export enum OverlayKind {
+    none,
+    add-tab,
+    rename-tab,
+    add-item,
+    edit-item,
+    confirm-delete-item,
+    confirm-delete-tab,
+}
+
+export struct TabViewData {
+    title: string,
+    selected: bool,
+}
+
+export struct ItemViewData {
+    title: string,
+    preview: string,
+    can-delete: bool,
+}
+
+component VStack inherits VerticalLayout {
+    spacing: 12px;
+    padding: 0px;
+}
+
+component HStack inherits HorizontalLayout {
+    spacing: 10px;
+    padding: 0px;
+}
+
+component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <color> fill-color: #ffffff;
+    in property <color> hover-color: #f4f7fc;
+    in property <color> pressed-color: #e8eef8;
+    in property <color> stroke-color: #dbe3ef;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: root.stroke-color;
+    background: !root.enabled ? #f6f8fc
+        : tap.pressed ? root.pressed-color
+        : tap.has-hover ? root.hover-color
+        : root.fill-color;
+    opacity: root.enabled ? 1 : 0.45;
+    clip: true;
+
+    Image {
+        source: root.icon;
+        width: 15px;
+        height: 15px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    tap := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+component TextButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    min-width: 76px;
+    height: 38px;
+    border-radius: 13px;
+    border-width: 1px;
+    border-color: root.primary ? #2d63f6 : #d8e1ee;
+    background: !root.enabled ? #f3f6fb
+        : tap.pressed ? (root.primary ? #214fd3 : #edf3fc)
+        : tap.has-hover ? (root.primary ? #2b5ef0 : #f4f7fc)
+        : (root.primary ? #2d63f6 : #ffffff);
+    opacity: root.enabled ? 1 : 0.5;
+    clip: true;
+
+    Text {
+        text: root.text;
+        width: parent.width;
+        height: parent.height;
+        color: root.primary ? #ffffff : #22304b;
+        font-size: 13px;
+        font-weight: 650;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    tap := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+component TextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    callback edited(value: string);
+    callback submitted(value: string);
+
+    min-height: 42px;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: input.has-focus ? #7b9bff : #dbe3ef;
+    background: #ffffff;
+    clip: true;
+
+    input := TextInput {
+        text <=> root.text;
+        x: 14px;
+        y: 10px;
+        width: parent.width - 28px;
+        height: parent.height - 20px;
+        font-size: 13px;
+        color: #1a2640;
+        selection-background-color: #2d63f6;
+        selection-foreground-color: #ffffff;
+        edited => { root.edited(root.text); }
+        accepted => { root.submitted(root.text); }
+    }
+
+    if root.text == "" : Text {
+        text: root.placeholder;
+        x: 14px;
+        y: 11px;
+        width: parent.width - 28px;
+        color: #93a1b8;
+        font-size: 13px;
+        overflow: elide;
+    }
+}
+
+component TextAreaField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    callback edited(value: string);
+
+    min-height: 92px;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: input.has-focus ? #7b9bff : #dbe3ef;
+    background: #ffffff;
+    clip: true;
+
+    input := TextInput {
+        text <=> root.text;
+        x: 14px;
+        y: 12px;
+        width: parent.width - 28px;
+        height: parent.height - 24px;
+        color: #1a2640;
+        font-size: 13px;
+        wrap: word-wrap;
+        single-line: false;
+        selection-background-color: #2d63f6;
+        selection-foreground-color: #ffffff;
+        edited => { root.edited(root.text); }
+    }
+
+    if root.text == "" : Text {
+        text: root.placeholder;
+        x: 14px;
+        y: 13px;
+        width: parent.width - 28px;
+        color: #93a1b8;
+        font-size: 13px;
+    }
+}
+
+component HotkeyCaptureField inherits Rectangle {
+    in property <string> text;
+    in property <bool> recording;
+    callback start-recording;
+    callback stop-recording;
+    callback capture-hotkey(key: string, alt: bool, ctrl: bool, shift: bool);
+
+    min-height: 42px;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: root.recording ? #7b9bff : #dbe3ef;
+    background: root.recording ? #eef4ff : #ffffff;
+    clip: true;
+
+    Text {
+        text: root.recording ? "Press shortcut" : (root.text == "" ? "Click to record" : root.text);
+        x: 14px;
+        y: 11px;
+        width: parent.width - 28px;
+        color: root.recording ? #2d63f6 : (root.text == "" ? #93a1b8 : #1a2640);
+        font-size: 13px;
+        font-weight: root.recording ? 650 : 500;
+        overflow: elide;
+    }
+
+    focus-area := FocusScope {
+        changed has-focus => {
+            if (!self.has-focus && root.recording) {
+                root.stop-recording();
+            }
+        }
+
+        key-pressed(event) => {
+            root.capture-hotkey(event.text, event.modifiers.alt, event.modifiers.control, event.modifiers.shift);
+            return accept;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.start-recording();
+            focus-area.focus();
+        }
+    }
+}
+
+component ToggleSwitch inherits Rectangle {
+    in property <bool> checked;
+    callback toggled;
+
+    width: 42px;
+    height: 24px;
+    border-radius: 12px;
+    background: root.checked ? #0d6fd3 : #dbe4f0;
+    clip: true;
+
+    Rectangle {
+        x: root.checked ? parent.width - 21px : 3px;
+        y: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: #ffffff;
+        animate x { duration: 120ms; }
+    }
+
+    TouchArea {
+        clicked => { root.toggled(); }
+    }
+}
+component TabChip inherits Rectangle {
+    in property <string> title;
+    in property <bool> selected;
+    callback clicked;
+    callback double-clicked;
+    callback delete-clicked;
+    callback drag-dropped(position-x: length);
+
+    width: 86px;
+    height: 34px;
+    background: transparent;
+
+    main-touch := TouchArea {
+        width: parent.width - (root.selected ? 18px : 0px);
+        height: parent.height;
+        clicked => { root.clicked(); }
+        double-clicked => { root.double-clicked(); }
+        pointer-event(pe) => {
+            if (pe.button == PointerEventButton.left && pe.kind == PointerEventKind.up) {
+                root.drag-dropped(parent.x + self.mouse-x);
+            }
+        }
+    }
+
+    Text {
+        text: root.title;
+        x: 4px;
+        y: 6px;
+        width: parent.width - (root.selected ? 20px : 8px);
+        height: 20px;
+        color: root.selected ? #6252d2 : #253149;
+        font-size: 13px;
+        font-weight: root.selected ? 650 : 500;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    if root.selected : Rectangle {
+        x: 0px;
+        y: parent.height - 2px;
+        width: parent.width - 10px;
+        height: 2px;
+        background: #6252d2;
+    }
+
+    if root.selected : Rectangle {
+        x: parent.width - 16px;
+        y: 7px;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: close-touch.has-hover ? #edf1f7 : transparent;
+
+        Text {
+            text: "x";
+            width: parent.width;
+            height: parent.height;
+            color: #6e7a90;
+            font-size: 9px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        close-touch := TouchArea {
+            clicked => { root.delete-clicked(); }
+        }
+    }
+}
+
+component ItemCard inherits Rectangle {
+    in property <string> title;
+    in property <string> preview;
+    in property <bool> delete-mode;
+    callback card-clicked;
+    callback copy-clicked;
+    callback edit-clicked;
+    callback delete-clicked;
+    callback drag-dropped(position-y: length);
+
+    height: 92px;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: root.delete-mode ? #f2c7cf : #dde5f0;
+    background: touch.has-hover && !root.delete-mode ? #fbfdff : #ffffff;
+    clip: true;
+
+    touch := TouchArea {
+        clicked => {
+            if (!root.delete-mode) {
+                root.card-clicked();
+            }
+        }
+    }
+
+    Rectangle {
+        x: 12px;
+        y: 12px;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: grip-touch.has-hover ? #cfd8e8 : #dfe6f0;
+        background: grip-touch.has-hover ? #f3f7fc : #f8fbff;
+        visible: !root.delete-mode;
+
+        Image {
+            source: @image-url("icons/grip.svg");
+            width: 12px;
+            height: 12px;
+            x: 4px;
+            y: 4px;
+        }
+
+        grip-touch := TouchArea {
+            clicked => { }
+            pointer-event(pe) => {
+                if (pe.button == PointerEventButton.left && pe.kind == PointerEventKind.up) {
+                    root.drag-dropped(root.y + self.mouse-y);
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: 44px;
+        y: 14px;
+        width: parent.width - 96px;
+        height: parent.height - 28px;
+        background: transparent;
+
+        Text {
+            text: root.title;
+            width: parent.width;
+            height: 18px;
+            color: #18253d;
+            font-size: 14px;
+            font-weight: 650;
+            vertical-alignment: top;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.preview;
+            y: 24px;
+            width: parent.width;
+            height: parent.height - 24px;
+            color: #6b7890;
+            font-size: 12px;
+            wrap: word-wrap;
+            vertical-alignment: top;
+            overflow: elide;
+        }
+    }
+
+    IconButton {
+        x: parent.width - 44px;
+        y: 12px;
+        width: 30px;
+        height: 30px;
+        icon: @image-url("icons/copy.svg");
+        clicked => { root.copy-clicked(); }
+    }
+
+    if root.delete-mode : IconButton {
+        x: parent.width - 44px;
+        y: 48px;
+        width: 30px;
+        height: 22px;
+        border-radius: 10px;
+        fill-color: #fff2f4;
+        hover-color: #ffe8ec;
+        pressed-color: #ffe0e5;
+        stroke-color: #f2c7cf;
+        icon: @image-url("icons/delete.svg");
+        clicked => { root.delete-clicked(); }
+    }
+
+    if !root.delete-mode : IconButton {
+        x: parent.width - 44px;
+        y: 48px;
+        width: 30px;
+        height: 22px;
+        border-radius: 10px;
+        icon: @image-url("icons/edit.svg");
+        clicked => { root.edit-clicked(); }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Quick Paste";
+    width: 440px;
+    height: 664px;
+    no-frame: true;
+    background: #00000000;
+
+    in property <[TabViewData]> tabs;
+    in property <[ItemViewData]> items;
+    in property <ActiveView> active-view;
+    in property <OverlayKind> overlay;
+    in property <bool> delete-mode;
+    in property <bool> has-tabs;
+    in property <bool> has-current-tab;
+    in property <bool> can-add-tab;
+    in property <bool> can-add-item;
+    in property <bool> show-delete-toggle;
+    in property <bool> show-empty-state;
+    in property <string> empty-title;
+    in property <string> empty-hint;
+    in property <string> status-text;
+    in property <bool> status-is-error;
+    in property <bool> launch-at-startup;
+    in property <bool> hotkey-recording;
+    in-out property <string> hotkey;
+    in-out property <string> draft-hotkey;
+    in-out property <string> draft-tab-name;
+    in-out property <string> draft-item-title;
+    in-out property <string> draft-item-content;
+
+    callback select-tab(index: int);
+    callback request-rename-tab(index: int);
+    callback request-delete-tab(index: int);
+    callback reorder-tab(index: int, position-x: length);
+    callback start-window-drag;
+    callback drag-window;
+    callback end-window-drag;
+    callback open-home;
+    callback open-settings;
+    callback close-settings;
+    callback open-add-tab;
+    callback submit-tab-form(name: string);
+    callback open-add-item;
+    callback request-edit-item(index: int);
+    callback submit-item-form(title: string, content: string);
+    callback toggle-delete-mode;
+    callback request-delete-item(index: int);
+    callback confirm-delete-item;
+    callback confirm-delete-tab;
+    callback cancel-overlay;
+    callback copy-item(index: int);
+    callback reorder-item(index: int, position-y: length);
+    callback begin-hotkey-recording;
+    callback end-hotkey-recording;
+    callback capture-hotkey(key: string, alt: bool, ctrl: bool, shift: bool);
+    callback toggle-launch-at-startup;
+    callback save-hotkey(value: string);
+    callback update-draft-hotkey(value: string);
+    callback update-draft-tab-name(value: string);
+    callback update-draft-item-title(value: string);
+    callback update-draft-item-content(value: string);
+    callback trigger-import;
+    callback trigger-export;
+    callback close-app;
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #ffffff;
+
+        Rectangle {
+            x: 14px;
+            y: 14px;
+            width: parent.width - 28px;
+            height: parent.height - 28px;
+            border-radius: 28px;
+            border-width: 1px;
+            border-color: #d8e1ee;
+            background: #ffffff;
+            clip: true;
+
+            main-column := VStack {
+                width: parent.width;
+                height: parent.height;
+                padding: 18px;
+                spacing: 14px;
+
+                Rectangle {
+                    height: 42px;
+                    background: transparent;
+                    vertical-stretch: 0;
+
+                    HStack {
+                        width: parent.width;
+                        height: parent.height;
+                        spacing: 10px;
+
+                        if root.active-view == ActiveView.settings : IconButton {
+                            icon: @image-url("icons/back.svg");
+                            clicked => { root.close-settings(); }
+                        }
+
+                        Rectangle {
+                            background: transparent;
+                            horizontal-stretch: 1;
+
+                            TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+                                moved => {
+                                    if (self.pressed) {
+                                        root.drag-window();
+                                    }
+                                }
+                                changed pressed => {
+                                    if (self.pressed) {
+                                        root.start-window-drag();
+                                    } else {
+                                        root.end-window-drag();
+                                    }
+                                }
+                            }
+
+                            VStack {
+                                width: parent.width;
+                                height: parent.height;
+                                spacing: 2px;
+
+                                Text {
+                                    text: root.active-view == ActiveView.home ? "Quick Paste" : "Settings";
+                                    color: #1d2940;
+                                    font-size: 17px;
+                                    font-weight: 700;
+                                    height: 20px;
+                                    overflow: elide;
+                                }
+
+                                if root.active-view == ActiveView.home : Text {
+                                    text: root.has-tabs ? "Click to copy" : "Add a tab to start";
+                                    color: #7a879d;
+                                    font-size: 11px;
+                                    height: 14px;
+                                }
+                            }
+                        }
+
+                        if root.active-view == ActiveView.home : IconButton {
+                            icon: @image-url("icons/settings.svg");
+                            clicked => { root.open-settings(); }
+                        }
+
+                        IconButton {
+                            icon: @image-url("icons/close.svg");
+                            clicked => { root.close-app(); }
+                        }
+                    }
+                }
+
+                if root.active-view == ActiveView.home : Rectangle {
+                    background: transparent;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+
+                    VStack {
+                        width: parent.width;
+                        height: parent.height;
+                        spacing: 10px;
+
+                        Rectangle {
+                            height: 40px;
+                            background: transparent;
+                            vertical-stretch: 0;
+
+                            Rectangle {
+                                y: parent.height - 1px;
+                                width: parent.width;
+                                height: 1px;
+                                background: #dfe6f1;
+                            }
+
+                            ScrollView {
+                                width: parent.width;
+                                height: parent.height;
+                                horizontal-scrollbar-policy: as-needed;
+                                vertical-scrollbar-policy: always-off;
+
+                                Rectangle {
+                                    width: root.tabs.length * 88px + (root.can-add-tab ? 40px : 0px);
+                                    height: 38px;
+                                    background: transparent;
+
+                                    for tab[index] in root.tabs : TabChip {
+                                        x: index * 88px;
+                                        y: 0px;
+                                        title: tab.title;
+                                        selected: tab.selected;
+                                        clicked => { root.select-tab(index); }
+                                        double-clicked => { root.request-rename-tab(index); }
+                                        delete-clicked => { root.request-delete-tab(index); }
+                                        drag-dropped(position-x) => { root.reorder-tab(index, position-x); }
+                                    }
+
+                                    if root.can-add-tab : IconButton {
+                                        x: root.tabs.length * 88px;
+                                        y: 1px;
+                                        width: 32px;
+                                        height: 32px;
+                                        border-radius: 10px;
+                                        icon: @image-url("icons/plus.svg");
+                                        clicked => { root.open-add-tab(); }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            background: #ffffff;
+                            border-radius: 16px;
+                            border-width: 1px;
+                            border-color: #dfe6f1;
+                            horizontal-stretch: 1;
+                            vertical-stretch: 1;
+                            clip: true;
+
+                            panel-column := VStack {
+                                width: parent.width;
+                                height: parent.height;
+                                padding: 14px;
+                                spacing: 12px;
+
+                                if root.overlay == OverlayKind.add-tab || root.overlay == OverlayKind.rename-tab : Rectangle {
+                                    height: 86px;
+                                    border-radius: 12px;
+                                    border-width: 1px;
+                                    border-color: #e2e8f2;
+                                    background: #fafcff;
+                                    vertical-stretch: 0;
+
+                                    VStack {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        padding: 12px;
+                                        spacing: 8px;
+
+                                        Text {
+                                            text: root.overlay == OverlayKind.add-tab ? "New tab" : "Rename tab";
+                                            color: #1a2640;
+                                            font-size: 13px;
+                                            font-weight: 650;
+                                            height: 16px;
+                                        }
+
+                                        HStack {
+                                            width: parent.width;
+                                            height: 38px;
+                                            spacing: 8px;
+
+                                            TextField {
+                                                text: root.draft-tab-name;
+                                                placeholder: "Tab name";
+                                                horizontal-stretch: 1;
+                                                edited(value) => { root.update-draft-tab-name(value); }
+                                                submitted(value) => { root.submit-tab-form(value); }
+                                            }
+
+                                            TextButton {
+                                                text: "Save";
+                                                width: 78px;
+                                                primary: true;
+                                                enabled: root.draft-tab-name != "";
+                                                clicked => { root.submit-tab-form(root.draft-tab-name); }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if root.overlay == OverlayKind.add-item || root.overlay == OverlayKind.edit-item : Rectangle {
+                                    height: 180px;
+                                    border-radius: 12px;
+                                    border-width: 1px;
+                                    border-color: #e2e8f2;
+                                    background: #fafcff;
+                                    vertical-stretch: 0;
+
+                                    VStack {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        padding: 12px;
+                                        spacing: 8px;
+
+                                        Text {
+                                            text: root.overlay == OverlayKind.add-item ? "New item" : "Edit item";
+                                            color: #1a2640;
+                                            font-size: 13px;
+                                            font-weight: 650;
+                                            height: 16px;
+                                        }
+
+                                        TextField {
+                                            text: root.draft-item-title;
+                                            placeholder: "Title";
+                                            edited(value) => { root.update-draft-item-title(value); }
+                                            submitted(value) => { root.update-draft-item-title(value); }
+                                        }
+
+                                        TextAreaField {
+                                            text: root.draft-item-content;
+                                            placeholder: "Content";
+                                            height: 82px;
+                                            edited(value) => { root.update-draft-item-content(value); }
+                                        }
+
+                                        HStack {
+                                            width: parent.width;
+                                            height: 38px;
+
+                                            Rectangle {
+                                                background: transparent;
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            TextButton {
+                                                text: "Cancel";
+                                                width: 76px;
+                                                clicked => { root.cancel-overlay(); }
+                                            }
+
+                                            TextButton {
+                                                text: root.overlay == OverlayKind.add-item ? "Add" : "Save";
+                                                width: 76px;
+                                                primary: true;
+                                                enabled: root.draft-item-title != "" && root.draft-item-content != "";
+                                                clicked => { root.submit-item-form(root.draft-item-title, root.draft-item-content); }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    background: transparent;
+                                    horizontal-stretch: 1;
+                                    vertical-stretch: 1;
+
+                                    if root.show-empty-state : Rectangle {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        background: transparent;
+
+                                        VStack {
+                                            x: 26px;
+                                            y: 26px;
+                                            width: parent.width - 52px;
+                                            height: parent.height - 52px;
+                                            spacing: 8px;
+
+                                            Text {
+                                                text: root.empty-title;
+                                                color: #1a2640;
+                                                font-size: 18px;
+                                                font-weight: 700;
+                                                horizontal-alignment: center;
+                                            }
+
+                                            Text {
+                                                text: root.empty-hint;
+                                                color: #78859c;
+                                                font-size: 12px;
+                                                wrap: word-wrap;
+                                                horizontal-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    if !root.show-empty-state : ScrollView {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        horizontal-scrollbar-policy: always-off;
+                                        vertical-scrollbar-policy: as-needed;
+
+                                        Rectangle {
+                                            width: parent.width - 8px;
+                                            height: root.items.length * 104px + 8px;
+                                            background: transparent;
+
+                                            for item[index] in root.items : ItemCard {
+                                                x: 0px;
+                                                y: index * 104px;
+                                                width: parent.width - 8px;
+                                                title: item.title;
+                                                preview: item.preview;
+                                                delete-mode: item.can-delete;
+                                                card-clicked => { root.copy-item(index); }
+                                                copy-clicked => { root.copy-item(index); }
+                                                edit-clicked => { root.request-edit-item(index); }
+                                                delete-clicked => { root.request-delete-item(index); }
+                                                drag-dropped(position-y) => { root.reorder-item(index, position-y); }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    height: 34px;
+                                    background: transparent;
+                                    vertical-stretch: 0;
+
+                                    HStack {
+                                        width: parent.width;
+                                        height: parent.height;
+
+                                        Rectangle {
+                                            background: transparent;
+                                            horizontal-stretch: 1;
+                                        }
+
+                                        if root.show-delete-toggle : IconButton {
+                                            icon: @image-url("icons/delete.svg");
+                                            fill-color: root.delete-mode ? #fff2f4 : #ffffff;
+                                            hover-color: root.delete-mode ? #ffe8ec : #f4f7fc;
+                                            pressed-color: root.delete-mode ? #ffe0e5 : #e8eef8;
+                                            stroke-color: root.delete-mode ? #f2c7cf : #dbe3ef;
+                                            clicked => { root.toggle-delete-mode(); }
+                                        }
+
+                                        if root.can-add-item : IconButton {
+                                            icon: @image-url("icons/plus.svg");
+                                            clicked => { root.open-add-item(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.active-view == ActiveView.settings : Rectangle {
+                    background: transparent;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: 92px;
+                        height: parent.height;
+                        border-radius: 14px;
+                        border-width: 1px;
+                        border-color: #dfe6f1;
+                        background: #f6f8fb;
+
+                        Text {
+                            text: "Settings";
+                            x: 10px;
+                            y: 10px;
+                            color: #7a879d;
+                            font-size: 11px;
+                        }
+
+                        Rectangle {
+                            x: 10px;
+                            y: 30px;
+                            width: parent.width - 20px;
+                            height: 34px;
+                            border-radius: 10px;
+                            background: #ffffff;
+                            border-width: 1px;
+                            border-color: #d7deea;
+
+                            Text {
+                                text: "Basic";
+                                x: 12px;
+                                width: parent.width - 24px;
+                                height: parent.height;
+                                color: #1d2940;
+                                font-size: 13px;
+                                font-weight: 650;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        x: 106px;
+                        y: 0px;
+                        width: parent.width - 106px;
+                        height: parent.height;
+                        border-radius: 16px;
+                        border-width: 1px;
+                        border-color: #dfe6f1;
+                        background: #ffffff;
+                        clip: true;
+
+                        Rectangle {
+                            x: 16px;
+                            y: 16px;
+                            width: parent.width - 32px;
+                            height: 86px;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: #e2e8f2;
+                            background: #fafcff;
+
+                            Text {
+                                text: "Hotkey";
+                                x: 12px;
+                                y: 12px;
+                                color: #1a2640;
+                                font-size: 13px;
+                                font-weight: 650;
+                            }
+
+                            HotkeyCaptureField {
+                                text: root.draft-hotkey;
+                                recording: root.hotkey-recording;
+                                x: 12px;
+                                y: 36px;
+                                width: parent.width - 98px;
+                                height: 38px;
+                                start-recording => { root.begin-hotkey-recording(); }
+                                stop-recording => { root.end-hotkey-recording(); }
+                                capture-hotkey(key, alt, ctrl, shift) => { root.capture-hotkey(key, alt, ctrl, shift); }
+                            }
+
+                            TextButton {
+                                text: "Save";
+                                width: 70px;
+                                x: parent.width - 82px;
+                                y: 36px;
+                                primary: true;
+                                clicked => { root.save-hotkey(root.draft-hotkey); }
+                            }
+                        }
+
+                        Rectangle {
+                            x: 16px;
+                            y: 116px;
+                            width: parent.width - 32px;
+                            height: 72px;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: #e2e8f2;
+                            background: #fafcff;
+
+                            Text {
+                                text: "Startup";
+                                x: 12px;
+                                y: 14px;
+                                color: #1a2640;
+                                font-size: 13px;
+                                font-weight: 650;
+                            }
+
+                            Text {
+                                text: root.launch-at-startup ? "Launch at sign-in" : "Disabled";
+                                x: 12px;
+                                y: 34px;
+                                color: #7a879d;
+                                font-size: 11px;
+                            }
+
+                            ToggleSwitch {
+                                x: parent.width - 54px;
+                                y: 24px;
+                                checked: root.launch-at-startup;
+                                toggled => { root.toggle-launch-at-startup(); }
+                            }
+                        }
+
+                        Rectangle {
+                            x: 16px;
+                            y: 202px;
+                            width: parent.width - 32px;
+                            height: 102px;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: #e2e8f2;
+                            background: #fafcff;
+
+                            Text {
+                                text: "Config";
+                                x: 12px;
+                                y: 12px;
+                                color: #1a2640;
+                                font-size: 13px;
+                                font-weight: 650;
+                            }
+
+                            TextButton {
+                                text: "Import";
+                                width: 108px;
+                                x: 12px;
+                                y: 38px;
+                                clicked => { root.trigger-import(); }
+                            }
+
+                            TextButton {
+                                text: "Export";
+                                width: 108px;
+                                x: 130px;
+                                y: 38px;
+                                clicked => { root.trigger-export(); }
+                            }
+
+                            Text {
+                                text: "Import overwrites current config.";
+                                x: 12px;
+                                y: 82px;
+                                color: #7a879d;
+                                font-size: 11px;
+                            }
+                        }
+                    }
+                }
+
+                if root.status-text != "" : Rectangle {
+                    height: 22px;
+                    border-radius: 11px;
+                    background: root.status-is-error ? #fff2f4 : #edf4ff;
+                    vertical-stretch: 0;
+
+                    Text {
+                        text: root.status-text;
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        color: root.status-is-error ? #bf405a : #4b6387;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        if root.overlay == OverlayKind.confirm-delete-item || root.overlay == OverlayKind.confirm-delete-tab : Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: #0d1320;
+            opacity: 0.20;
+            TouchArea { width: parent.width; height: parent.height; }
+        }
+
+        if root.overlay == OverlayKind.confirm-delete-item || root.overlay == OverlayKind.confirm-delete-tab : Rectangle {
+            x: 72px;
+            y: 226px;
+            width: parent.width - 144px;
+            height: 164px;
+            border-radius: 24px;
+            border-width: 1px;
+            border-color: #dbe3ef;
+            background: #ffffff;
+            clip: true;
+
+            VStack {
+                width: parent.width;
+                height: parent.height;
+                padding: 18px;
+                spacing: 10px;
+
+                Text {
+                    text: root.overlay == OverlayKind.confirm-delete-item ? "Delete item?" : "Delete tab?";
+                    color: #17243b;
+                    font-size: 17px;
+                    font-weight: 700;
+                    height: 20px;
+                }
+
+                Text {
+                    text: root.overlay == OverlayKind.confirm-delete-item
+                        ? "This item will be removed."
+                        : "This tab and its items will be removed.";
+                    color: #75839a;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    background: transparent;
+                    vertical-stretch: 1;
+                }
+
+                HStack {
+                    width: parent.width;
+                    height: 38px;
+
+                    Rectangle {
+                        background: transparent;
+                        horizontal-stretch: 1;
+                    }
+
+                    TextButton {
+                        text: "Cancel";
+                        width: 76px;
+                        clicked => { root.cancel-overlay(); }
+                    }
+
+                    TextButton {
+                        text: "Delete";
+                        width: 76px;
+                        primary: true;
+                        clicked => {
+                            if (root.overlay == OverlayKind.confirm-delete-item) {
+                                root.confirm-delete-item();
+                            } else {
+                                root.confirm-delete-tab();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+
