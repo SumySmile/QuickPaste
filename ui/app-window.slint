@@ -1,12 +1,10 @@
 import { ScrollView } from "std-widgets.slint";
 
-export enum ActiveView { home, settings }
 export enum OverlayKind {
     none,
     add-tab,
     rename-tab,
     add-item,
-    edit-item,
     confirm-delete-item,
     confirm-delete-tab,
 }
@@ -19,7 +17,30 @@ export struct TabViewData {
 export struct ItemViewData {
     title: string,
     preview: string,
+    content: string,
     can-delete: bool,
+    editing: bool,
+}
+
+export global Theme {
+    in property <color> surface-bg: #fbf7f1;
+    in property <color> workspace-bg: #f4eee5;
+    in property <color> workspace-bg-soft: #f8f2e9;
+    in property <color> panel-bg: #fffdfa;
+    in property <color> panel-border: #e7dccb;
+    in property <color> panel-divider: #efe4d6;
+    in property <color> text-primary: #243246;
+    in property <color> text-secondary: #7d8898;
+    in property <color> brand-accent: #f3a53d;
+    in property <color> brand-accent-hover: #ec9623;
+    in property <color> brand-accent-pressed: #dc8515;
+    in property <color> brand-accent-soft: #fff1dc;
+    in property <color> brand-accent-border: #f1c98f;
+    in property <color> danger-bg: #fff2f2;
+    in property <color> danger-soft: #ffe4e5;
+    in property <color> danger-border: #efc3c6;
+    in property <color> info-bg: #fff4e4;
+    in property <color> info-text: #8d5b18;
 }
 
 component VStack inherits VerticalLayout {
@@ -34,19 +55,22 @@ component HStack inherits HorizontalLayout {
 
 component IconButton inherits Rectangle {
     in property <image> icon;
-    in property <color> fill-color: #ffffff;
-    in property <color> hover-color: #f4f7fc;
-    in property <color> pressed-color: #e8eef8;
-    in property <color> stroke-color: #dbe3ef;
+    in property <color> fill-color: Theme.panel-bg;
+    in property <color> hover-color: Theme.brand-accent-soft;
+    in property <color> pressed-color: #ffe3bc;
+    in property <color> stroke-color: Theme.panel-border;
+    in property <length> icon-size: 15px;
     in property <bool> enabled: true;
     callback clicked;
+    callback hover-started;
+    callback hover-ended;
 
     width: 34px;
     height: 34px;
     border-radius: 12px;
     border-width: 1px;
     border-color: root.stroke-color;
-    background: !root.enabled ? #f6f8fc
+    background: !root.enabled ? Theme.workspace-bg-soft
         : tap.pressed ? root.pressed-color
         : tap.has-hover ? root.hover-color
         : root.fill-color;
@@ -55,14 +79,23 @@ component IconButton inherits Rectangle {
 
     Image {
         source: root.icon;
-        width: 15px;
-        height: 15px;
+        width: root.icon-size;
+        height: root.icon-size;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
     }
 
     tap := TouchArea {
         enabled: root.enabled;
+        changed has-hover => {
+            if (root.enabled) {
+                if (self.has-hover) {
+                    root.hover-started();
+                } else {
+                    root.hover-ended();
+                }
+            }
+        }
         clicked => {
             if (root.enabled) {
                 root.clicked();
@@ -71,9 +104,45 @@ component IconButton inherits Rectangle {
     }
 }
 
+component ToolGlyphButton inherits Rectangle {
+    in property <image> icon;
+    in property <length> icon-size: 14px;
+    callback clicked;
+    callback hover-started;
+    callback hover-ended;
+
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    background: tap.pressed ? #ffe3bc
+        : tap.has-hover ? Theme.brand-accent-soft
+        : transparent;
+    clip: true;
+
+    Image {
+        source: root.icon;
+        width: root.icon-size;
+        height: root.icon-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    tap := TouchArea {
+        changed has-hover => {
+            if (self.has-hover) {
+                root.hover-started();
+            } else {
+                root.hover-ended();
+            }
+        }
+        clicked => { root.clicked(); }
+    }
+}
+
 component TextButton inherits Rectangle {
     in property <string> text;
     in property <bool> primary: false;
+    in property <bool> danger: false;
     in property <bool> enabled: true;
     callback clicked;
 
@@ -81,19 +150,23 @@ component TextButton inherits Rectangle {
     height: 38px;
     border-radius: 13px;
     border-width: 1px;
-    border-color: root.primary ? #2d63f6 : #d8e1ee;
-    background: !root.enabled ? #f3f6fb
-        : tap.pressed ? (root.primary ? #214fd3 : #edf3fc)
-        : tap.has-hover ? (root.primary ? #2b5ef0 : #f4f7fc)
-        : (root.primary ? #2d63f6 : #ffffff);
-    opacity: root.enabled ? 1 : 0.5;
+    border-color: !root.enabled ? Theme.panel-border
+        : root.danger ? Theme.danger-border
+        : (root.primary ? Theme.brand-accent : Theme.panel-border);
+    background: !root.enabled ? Theme.workspace-bg-soft
+        : tap.pressed ? (root.danger ? #ffcfd1 : (root.primary ? Theme.brand-accent-pressed : Theme.workspace-bg))
+        : tap.has-hover ? (root.danger ? Theme.danger-soft : (root.primary ? Theme.brand-accent-hover : Theme.brand-accent-soft))
+        : (root.danger ? Theme.danger-bg : (root.primary ? Theme.brand-accent : Theme.panel-bg));
+    opacity: 1;
     clip: true;
 
     Text {
         text: root.text;
         width: parent.width;
         height: parent.height;
-        color: root.primary ? #ffffff : #22304b;
+        color: !root.enabled ? #9ba5b2
+            : root.danger ? #b44758
+            : (root.primary ? #fffaf2 : Theme.text-primary);
         font-size: 13px;
         font-weight: 650;
         horizontal-alignment: center;
@@ -110,6 +183,193 @@ component TextButton inherits Rectangle {
     }
 }
 
+component InlineIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <color> icon-color: #7e6f59;
+    in property <color> hover-color: Theme.brand-accent-soft;
+    in property <color> pressed-color: #ffe3bc;
+    in property <length> icon-size: 13px;
+    callback clicked;
+
+    width: 20px;
+    height: 20px;
+    border-radius: 10px;
+    background: tap.pressed ? root.pressed-color
+        : tap.has-hover ? root.hover-color
+        : transparent;
+    clip: true;
+
+    Image {
+        source: root.icon;
+        width: root.icon-size;
+        height: root.icon-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: root.icon-color;
+    }
+
+    tap := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component BareCloseButton inherits Rectangle {
+    callback clicked;
+
+    width: 20px;
+    height: 20px;
+    border-radius: 10px;
+    background: tap.pressed ? #ffe1c0
+        : tap.has-hover ? Theme.brand-accent-soft
+        : transparent;
+    clip: true;
+
+    Image {
+        source: @image-url("icons/close.svg");
+        width: 11px;
+        height: 11px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: Theme.text-secondary;
+    }
+
+    tap := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component CompactTextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    callback edited(value: string);
+    callback submitted(value: string);
+    callback focus-lost(value: string);
+    callback request-cancel;
+    callback focus-input;
+
+    min-height: 30px;
+    border-radius: 10px;
+    border-width: 0px;
+    background: input.has-focus ? Theme.brand-accent-soft : transparent;
+    clip: true;
+
+    focus-input => {
+        input.focus();
+    }
+
+    input := TextInput {
+        text <=> root.text;
+        x: 10px;
+        y: 2px;
+        width: parent.width - 20px;
+        height: parent.height - 4px;
+        font-size: 12px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        selection-background-color: Theme.brand-accent;
+        selection-foreground-color: #ffffff;
+        edited => { root.edited(root.text); }
+        accepted => { root.submitted(root.text); }
+        changed has-focus => {
+            if (!self.has-focus) {
+                root.focus-lost(root.text);
+            }
+        }
+        key-pressed(event) => {
+            if (event.text == "\u{1b}") {
+                root.request-cancel();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    if root.text == "" : Text {
+        text: root.placeholder;
+        x: 10px;
+        y: 2px;
+        width: parent.width - 20px;
+        height: parent.height - 4px;
+        color: #9aa2ad;
+        font-size: 12px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    TouchArea {
+        enabled: !input.has-focus;
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: MouseCursor.text;
+        clicked => {
+            input.focus();
+        }
+    }
+}
+
+component SoftSectionDivider inherits Rectangle {
+    height: 8px;
+    background: transparent;
+
+    Rectangle {
+        y: 2px;
+        width: parent.width;
+        height: 1px;
+        background: #fffdfa;
+    }
+
+    Rectangle {
+        y: 3px;
+        width: parent.width;
+        height: 1px;
+        background: Theme.panel-divider;
+    }
+}
+
+component TooltipBubble inherits Rectangle {
+    in property <string> text;
+
+    width: min(max(label.preferred-width + 18px, 52px), 180px);
+    height: 28px;
+    border-radius: 14px;
+    background: #fff6e8;
+    clip: true;
+
+    label := Text {
+        text: root.text;
+        x: 9px;
+        width: parent.width - 18px;
+        height: parent.height;
+        color: Theme.info-text;
+        font-size: 11px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+}
+
+component ContentTooltipBubble inherits Rectangle {
+    in property <string> text;
+    in property <length> bubble-width: 248px;
+
+    width: root.bubble-width;
+    height: min(label.preferred-height + 16px, 74px);
+    border-radius: 14px;
+    background: #fff6e8;
+    clip: true;
+
+    label := Text {
+        text: root.text;
+        x: 10px;
+        y: 8px;
+        width: parent.width - 20px;
+        color: Theme.info-text;
+        font-size: 11px;
+        wrap: word-wrap;
+        overflow: elide;
+    }
+}
+
 component TextField inherits Rectangle {
     in-out property <string> text;
     in property <string> placeholder;
@@ -119,8 +379,8 @@ component TextField inherits Rectangle {
     min-height: 42px;
     border-radius: 14px;
     border-width: 1px;
-    border-color: input.has-focus ? #7b9bff : #dbe3ef;
-    background: #ffffff;
+    border-color: input.has-focus ? Theme.brand-accent : Theme.panel-border;
+    background: Theme.panel-bg;
     clip: true;
 
     input := TextInput {
@@ -130,8 +390,8 @@ component TextField inherits Rectangle {
         width: parent.width - 28px;
         height: parent.height - 20px;
         font-size: 13px;
-        color: #1a2640;
-        selection-background-color: #2d63f6;
+        color: Theme.text-primary;
+        selection-background-color: Theme.brand-accent;
         selection-foreground-color: #ffffff;
         edited => { root.edited(root.text); }
         accepted => { root.submitted(root.text); }
@@ -142,7 +402,7 @@ component TextField inherits Rectangle {
         x: 14px;
         y: 11px;
         width: parent.width - 28px;
-        color: #93a1b8;
+        color: #9aa2ad;
         font-size: 13px;
         overflow: elide;
     }
@@ -156,8 +416,8 @@ component TextAreaField inherits Rectangle {
     min-height: 92px;
     border-radius: 16px;
     border-width: 1px;
-    border-color: input.has-focus ? #7b9bff : #dbe3ef;
-    background: #ffffff;
+    border-color: input.has-focus ? Theme.brand-accent : Theme.panel-border;
+    background: Theme.panel-bg;
     clip: true;
 
     input := TextInput {
@@ -166,11 +426,11 @@ component TextAreaField inherits Rectangle {
         y: 12px;
         width: parent.width - 28px;
         height: parent.height - 24px;
-        color: #1a2640;
+        color: Theme.text-primary;
         font-size: 13px;
         wrap: word-wrap;
         single-line: false;
-        selection-background-color: #2d63f6;
+        selection-background-color: Theme.brand-accent;
         selection-foreground-color: #ffffff;
         edited => { root.edited(root.text); }
     }
@@ -180,7 +440,7 @@ component TextAreaField inherits Rectangle {
         x: 14px;
         y: 13px;
         width: parent.width - 28px;
-        color: #93a1b8;
+        color: #9aa2ad;
         font-size: 13px;
     }
 }
@@ -195,22 +455,33 @@ component HotkeyCaptureField inherits Rectangle {
     min-height: 42px;
     border-radius: 14px;
     border-width: 1px;
-    border-color: root.recording ? #7b9bff : #dbe3ef;
-    background: root.recording ? #eef4ff : #ffffff;
+    border-color: root.recording ? Theme.brand-accent : Theme.panel-border;
+    background: root.recording ? Theme.brand-accent-soft : Theme.panel-bg;
     clip: true;
 
     Text {
         text: root.recording ? "Press shortcut" : (root.text == "" ? "Click to record" : root.text);
         x: 14px;
-        y: 11px;
+        y: 0px;
         width: parent.width - 28px;
-        color: root.recording ? #2d63f6 : (root.text == "" ? #93a1b8 : #1a2640);
-        font-size: 13px;
+        height: parent.height;
+        color: root.recording ? #a96810 : (root.text == "" ? #9aa2ad : Theme.text-primary);
+        font-size: 12px;
         font-weight: root.recording ? 650 : 500;
+        vertical-alignment: center;
         overflow: elide;
     }
 
-    focus-area := FocusScope {
+    focus-area := TextInput {
+        width: parent.width;
+        height: parent.height;
+        text: "";
+        read-only: true;
+        single-line: true;
+        color: #00000000;
+        selection-background-color: #00000000;
+        selection-foreground-color: #00000000;
+
         changed has-focus => {
             if (!self.has-focus && root.recording) {
                 root.stop-recording();
@@ -225,8 +496,8 @@ component HotkeyCaptureField inherits Rectangle {
 
     TouchArea {
         clicked => {
-            root.start-recording();
             focus-area.focus();
+            root.start-recording();
         }
     }
 }
@@ -238,7 +509,7 @@ component ToggleSwitch inherits Rectangle {
     width: 42px;
     height: 24px;
     border-radius: 12px;
-    background: root.checked ? #0d6fd3 : #dbe4f0;
+    background: root.checked ? Theme.brand-accent : #ddd5ca;
     clip: true;
 
     Rectangle {
@@ -258,17 +529,23 @@ component ToggleSwitch inherits Rectangle {
 component TabChip inherits Rectangle {
     in property <string> title;
     in property <bool> selected;
+    in property <bool> show-divider: false;
     callback clicked;
     callback double-clicked;
     callback delete-clicked;
-    callback drag-dropped(position-x: length);
+    callback drag-dropped(position_x: length);
 
-    width: 86px;
+    width: 78px;
     height: 34px;
-    background: transparent;
+    y: 6px;
+    border-radius: 10px;
+    border-width: 0px;
+    background: root.selected ? #fff8ef
+        : (main-touch.has-hover ? Theme.workspace-bg-soft : transparent);
+    clip: true;
 
     main-touch := TouchArea {
-        width: parent.width - (root.selected ? 18px : 0px);
+        width: parent.width;
         height: parent.height;
         clicked => { root.clicked(); }
         double-clicked => { root.double-clicked(); }
@@ -279,41 +556,42 @@ component TabChip inherits Rectangle {
         }
     }
 
-    Text {
+    title-label := Text {
         text: root.title;
-        x: 4px;
-        y: 6px;
-        width: parent.width - (root.selected ? 20px : 8px);
-        height: 20px;
-        color: root.selected ? #6252d2 : #253149;
-        font-size: 13px;
+        x: 10px;
+        y: 0px;
+        width: parent.width - (root.selected ? 34px : 12px);
+        height: parent.height;
+        color: root.selected ? Theme.text-primary : Theme.text-secondary;
+        font-size: 12px;
         font-weight: root.selected ? 650 : 500;
         vertical-alignment: center;
         overflow: elide;
     }
 
     if root.selected : Rectangle {
-        x: 0px;
-        y: parent.height - 2px;
-        width: parent.width - 10px;
-        height: 2px;
-        background: #6252d2;
+        x: 10px;
+        y: parent.height - 3px;
+        width: parent.width - 20px;
+        height: 3px;
+        border-radius: 2px;
+        background: Theme.brand-accent;
     }
 
     if root.selected : Rectangle {
-        x: parent.width - 16px;
-        y: 7px;
+        x: parent.width - self.width - 8px;
+        y: 8px;
         width: 14px;
         height: 14px;
         border-radius: 7px;
-        background: close-touch.has-hover ? #edf1f7 : transparent;
+        background: close-touch.has-hover ? Theme.brand-accent-soft : transparent;
 
         Text {
-            text: "x";
+            text: "×";
             width: parent.width;
             height: parent.height;
-            color: #6e7a90;
-            font-size: 9px;
+            color: Theme.text-secondary;
+            font-size: 11px;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -322,53 +600,101 @@ component TabChip inherits Rectangle {
             clicked => { root.delete-clicked(); }
         }
     }
+
 }
 
 component ItemCard inherits Rectangle {
     in property <string> title;
     in property <string> preview;
+    in property <string> content;
     in property <bool> delete-mode;
-    callback card-clicked;
+    in property <bool> editing;
+    in-out property <string> edit-title;
     callback copy-clicked;
     callback edit-clicked;
     callback delete-clicked;
-    callback drag-dropped(position-y: length);
+    callback edit-title-changed(value: string);
+    callback save-edit;
+    callback cancel-edit;
+    callback drag-dropped(position_y: length);
+    callback preview-tooltip-shown(text: string, anchor_x: length, anchor_y: length);
+    callback preview-tooltip-hidden;
 
-    height: 92px;
-    border-radius: 14px;
+    height: 72px;
+    border-radius: 12px;
     border-width: 1px;
-    border-color: root.delete-mode ? #f2c7cf : #dde5f0;
-    background: touch.has-hover && !root.delete-mode ? #fbfdff : #ffffff;
+    border-color: root.delete-mode ? Theme.danger-border
+        : (touch.has-hover ? Theme.panel-border : Theme.panel-divider);
+    background: root.delete-mode ? (touch.has-hover ? #fff5f5 : Theme.danger-bg)
+        : (touch.has-hover ? #fffaf4 : Theme.panel-bg);
     clip: true;
 
     touch := TouchArea {
-        clicked => {
-            if (!root.delete-mode) {
-                root.card-clicked();
-            }
-        }
+        clicked => { }
     }
 
-    Rectangle {
-        x: 12px;
-        y: 12px;
-        width: 20px;
-        height: 20px;
-        border-radius: 10px;
-        border-width: 1px;
-        border-color: grip-touch.has-hover ? #cfd8e8 : #dfe6f0;
-        background: grip-touch.has-hover ? #f3f7fc : #f8fbff;
-        visible: !root.delete-mode;
+    if root.delete-mode : Rectangle {
+        width: 34px;
+        height: parent.height;
+        background: #fff7f7;
+    }
 
-        Image {
-            source: @image-url("icons/grip.svg");
-            width: 12px;
-            height: 12px;
-            x: 4px;
-            y: 4px;
+    left-rail := Rectangle {
+        x: 10px;
+        y: 0px;
+        width: 22px;
+        height: parent.height;
+        background: transparent;
+
+        if !root.delete-mode : Rectangle {
+            x: 1px;
+            y: (parent.height - 18px) / 2;
+            width: 20px;
+            height: 18px;
+            border-radius: 9px;
+            background: transparent;
+
+            Rectangle {
+                x: 3px;
+                y: 5px;
+                width: 12px;
+                height: 2px;
+                border-radius: 1px;
+                background: grip-touch.has-hover ? #8f6d3c : #a19079;
+            }
+
+            Rectangle {
+                x: 3px;
+                y: 11px;
+                width: 12px;
+                height: 2px;
+                border-radius: 1px;
+                background: grip-touch.has-hover ? #8f6d3c : #a19079;
+            }
+        }
+
+        if root.delete-mode : Rectangle {
+            x: 1px;
+            y: (parent.height - 26px) / 2;
+            width: 22px;
+            height: 26px;
+            border-radius: 11px;
+            border-width: 0px;
+            background: delete-touch.has-hover ? Theme.danger-soft : #fff7f7;
+
+            Image {
+                source: @image-url("icons/delete.svg");
+                width: 13px;
+                height: 13px;
+                x: 4px;
+                y: 7px;
+            }
         }
 
         grip-touch := TouchArea {
+            enabled: !root.delete-mode;
+            width: parent.width;
+            height: parent.height;
             clicked => { }
             pointer-event(pe) => {
                 if (pe.button == PointerEventButton.left && pe.kind == PointerEventKind.up) {
@@ -376,70 +702,116 @@ component ItemCard inherits Rectangle {
                 }
             }
         }
+
+        delete-touch := TouchArea {
+            enabled: root.delete-mode;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.delete-clicked(); }
+        }
     }
 
-    Rectangle {
-        x: 44px;
-        y: 14px;
-        width: parent.width - 96px;
-        height: parent.height - 28px;
+    main-content := Rectangle {
+        x: 38px;
+        y: 0px;
+        width: parent.width - 50px;
+        height: parent.height - 14px;
         background: transparent;
 
-        Text {
-            text: root.title;
+        title-row := Rectangle {
             width: parent.width;
             height: 18px;
-            color: #18253d;
-            font-size: 14px;
-            font-weight: 650;
-            vertical-alignment: top;
-            overflow: elide;
+            background: transparent;
+
+            if !root.editing : Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: transparent;
+
+                title-label := Text {
+                    text: root.title;
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width - 34px;
+                    height: parent.height;
+                    color: Theme.text-primary;
+                    font-size: 14px;
+                    font-weight: 650;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                InlineIconButton {
+                    x: min(title-label.preferred-width + 6px, parent.width - self.width);
+                    y: -1px;
+                    icon: @image-url("icons/edit.svg");
+                    clicked => { root.edit-clicked(); }
+                }
+            }
+
+            if root.editing : CompactTextField {
+                width: parent.width;
+                height: parent.height;
+                text: root.edit-title;
+                placeholder: "Title";
+                edited(value) => { root.edit-title-changed(value); }
+                submitted(value) => { root.edit-title-changed(value); root.save-edit(); }
+                focus-lost(value) => { root.edit-title-changed(value); root.save-edit(); }
+                request-cancel => { root.cancel-edit(); }
+                init => {
+                    self.focus-input();
+                }
+            }
         }
 
-        Text {
-            text: root.preview;
-            y: 24px;
+        content-row := Rectangle {
+            y: 43px;
             width: parent.width;
-            height: parent.height - 24px;
-            color: #6b7890;
-            font-size: 12px;
-            wrap: word-wrap;
-            vertical-alignment: top;
-            overflow: elide;
+            height: 16px;
+            background: transparent;
+
+            preview-label := Text {
+                text: root.preview;
+                x: 0px;
+                y: 0px;
+                width: parent.width - 24px;
+                height: parent.height;
+                color: Theme.text-secondary;
+                font-size: 12px;
+                wrap: no-wrap;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            preview-touch := TouchArea {
+                width: min(preview-label.preferred-width + 6px, parent.width - 24px);
+                height: parent.height;
+                changed has-hover => {
+                    if (self.has-hover && root.content != "" && preview-label.preferred-width > preview-label.width) {
+                        root.preview-tooltip-shown(
+                            root.content,
+                            root.x + main-content.x + preview-label.x,
+                            root.y + main-content.y + content-row.y + content-row.height
+                        );
+                    } else {
+                        root.preview-tooltip-hidden();
+                    }
+                }
+                clicked => { root.copy-clicked(); }
+            }
+
+            InlineIconButton {
+                x: min(preview-touch.width + 8px, parent.width - self.width);
+                y: -3px;
+                width: 24px;
+                height: 24px;
+                icon-size: 16px;
+                hover-color: Theme.brand-accent-soft;
+                pressed-color: #ffe3bc;
+                icon: @image-url("icons/copy.svg");
+                clicked => { root.preview-tooltip-hidden(); root.copy-clicked(); }
+            }
         }
-    }
-
-    IconButton {
-        x: parent.width - 44px;
-        y: 12px;
-        width: 30px;
-        height: 30px;
-        icon: @image-url("icons/copy.svg");
-        clicked => { root.copy-clicked(); }
-    }
-
-    if root.delete-mode : IconButton {
-        x: parent.width - 44px;
-        y: 48px;
-        width: 30px;
-        height: 22px;
-        border-radius: 10px;
-        fill-color: #fff2f4;
-        hover-color: #ffe8ec;
-        pressed-color: #ffe0e5;
-        stroke-color: #f2c7cf;
-        icon: @image-url("icons/delete.svg");
-        clicked => { root.delete-clicked(); }
-    }
-
-    if !root.delete-mode : IconButton {
-        x: parent.width - 44px;
-        y: 48px;
-        width: 30px;
-        height: 22px;
-        border-radius: 10px;
-        icon: @image-url("icons/edit.svg");
-        clicked => { root.edit-clicked(); }
     }
 }
 
@@ -449,10 +821,10 @@ export component AppWindow inherits Window {
     height: 664px;
     no-frame: true;
     background: #00000000;
+    icon: @image-url("../assets/CopyPasteIcon.png");
 
     in property <[TabViewData]> tabs;
     in property <[ItemViewData]> items;
-    in property <ActiveView> active-view;
     in property <OverlayKind> overlay;
     in property <bool> delete-mode;
     in property <bool> has-tabs;
@@ -465,24 +837,25 @@ export component AppWindow inherits Window {
     in property <string> empty-hint;
     in property <string> status-text;
     in property <bool> status-is-error;
-    in property <bool> launch-at-startup;
-    in property <bool> hotkey-recording;
-    in-out property <string> hotkey;
-    in-out property <string> draft-hotkey;
+    in property <string> copied-toast-text;
+    in property <bool> show-copied-toast;
     in-out property <string> draft-tab-name;
     in-out property <string> draft-item-title;
     in-out property <string> draft-item-content;
+    property <string> preview-tooltip-text: "";
+    property <length> preview-tooltip_x: 0px;
+    property <length> preview-tooltip_y: 0px;
+    property <string> footer-tooltip-text: "";
+    property <length> footer-tooltip_x: 0px;
 
     callback select-tab(index: int);
     callback request-rename-tab(index: int);
     callback request-delete-tab(index: int);
-    callback reorder-tab(index: int, position-x: length);
+    callback reorder-tab(index: int, position_x: length);
     callback start-window-drag;
     callback drag-window;
     callback end-window-drag;
     callback open-home;
-    callback open-settings;
-    callback close-settings;
     callback open-add-tab;
     callback submit-tab-form(name: string);
     callback open-add-item;
@@ -490,585 +863,364 @@ export component AppWindow inherits Window {
     callback submit-item-form(title: string, content: string);
     callback toggle-delete-mode;
     callback request-delete-item(index: int);
+    callback save-inline-item-edit(index: int);
+    callback cancel-inline-item-edit;
     callback confirm-delete-item;
     callback confirm-delete-tab;
     callback cancel-overlay;
     callback copy-item(index: int);
-    callback reorder-item(index: int, position-y: length);
-    callback begin-hotkey-recording;
-    callback end-hotkey-recording;
-    callback capture-hotkey(key: string, alt: bool, ctrl: bool, shift: bool);
-    callback toggle-launch-at-startup;
-    callback save-hotkey(value: string);
-    callback update-draft-hotkey(value: string);
+    callback reorder-item(index: int, position_y: length);
     callback update-draft-tab-name(value: string);
     callback update-draft-item-title(value: string);
     callback update-draft-item-content(value: string);
-    callback trigger-import;
-    callback trigger-export;
     callback close-app;
 
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: #ffffff;
+        background: transparent;
 
         Rectangle {
-            x: 14px;
-            y: 14px;
-            width: parent.width - 28px;
-            height: parent.height - 28px;
+            x: 12px;
+            y: 12px;
+            width: parent.width - 24px;
+            height: parent.height - 24px;
             border-radius: 28px;
             border-width: 1px;
-            border-color: #d8e1ee;
-            background: #ffffff;
+            border-color: Theme.panel-border;
+            background: Theme.surface-bg;
             clip: true;
 
-            main-column := VStack {
-                width: parent.width;
-                height: parent.height;
-                padding: 18px;
-                spacing: 14px;
+            VStack {
+                x: 18px;
+                y: 18px;
+                width: parent.width - 36px;
+                height: parent.height - 36px;
+                spacing: 8px;
 
-                Rectangle {
-                    height: 42px;
+                header-zone := Rectangle {
+                    width: parent.width;
+                    height: 58px;
                     background: transparent;
-                    vertical-stretch: 0;
 
-                    HStack {
+                    header-band := Rectangle {
                         width: parent.width;
-                        height: parent.height;
-                        spacing: 10px;
+                        height: 44px;
+                        border-radius: 16px;
+                        background: transparent;
 
-                        if root.active-view == ActiveView.settings : IconButton {
-                            icon: @image-url("icons/back.svg");
-                            clicked => { root.close-settings(); }
-                        }
-
-                        Rectangle {
-                            background: transparent;
-                            horizontal-stretch: 1;
-
-                            TouchArea {
-                                width: parent.width;
-                                height: parent.height;
-                                moved => {
-                                    if (self.pressed) {
-                                        root.drag-window();
-                                    }
-                                }
-                                changed pressed => {
-                                    if (self.pressed) {
-                                        root.start-window-drag();
-                                    } else {
-                                        root.end-window-drag();
-                                    }
+                        TouchArea {
+                            width: parent.width - 44px;
+                            height: parent.height;
+                            moved => {
+                                if (self.pressed) {
+                                    root.drag-window();
                                 }
                             }
-
-                            VStack {
-                                width: parent.width;
-                                height: parent.height;
-                                spacing: 2px;
-
-                                Text {
-                                    text: root.active-view == ActiveView.home ? "Quick Paste" : "Settings";
-                                    color: #1d2940;
-                                    font-size: 17px;
-                                    font-weight: 700;
-                                    height: 20px;
-                                    overflow: elide;
-                                }
-
-                                if root.active-view == ActiveView.home : Text {
-                                    text: root.has-tabs ? "Click to copy" : "Add a tab to start";
-                                    color: #7a879d;
-                                    font-size: 11px;
-                                    height: 14px;
+                            changed pressed => {
+                                if (self.pressed) {
+                                    root.start-window-drag();
+                                } else {
+                                    root.end-window-drag();
                                 }
                             }
                         }
 
-                        if root.active-view == ActiveView.home : IconButton {
-                            icon: @image-url("icons/settings.svg");
-                            clicked => { root.open-settings(); }
+                        Text {
+                            text: "Quick Paste";
+                            x: 14px;
+                            y: 8px;
+                            width: parent.width - 68px;
+                            color: Theme.text-primary;
+                            font-size: 17px;
+                            font-weight: 700;
+                            height: 20px;
+                            overflow: elide;
                         }
 
-                        IconButton {
-                            icon: @image-url("icons/close.svg");
+                        Text {
+                            text: root.has-tabs ? "Click content to copy" : "Add a tab to start";
+                            x: 14px;
+                            y: 27px;
+                            width: parent.width - 68px;
+                            color: Theme.text-secondary;
+                            font-size: 10px;
+                            height: 12px;
+                            overflow: elide;
+                        }
+
+                        BareCloseButton {
+                            x: parent.width - 32px;
+                            y: 8px;
                             clicked => { root.close-app(); }
                         }
                     }
+
+                    Rectangle {
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.panel-divider;
+                    }
                 }
 
-                if root.active-view == ActiveView.home : Rectangle {
-                    background: transparent;
-                    horizontal-stretch: 1;
+                surface-zone := Rectangle {
+                    width: parent.width;
                     vertical-stretch: 1;
+                    border-radius: 0px;
+                    border-width: 0px;
+                    border-color: #00000000;
+                    background: transparent;
 
-                    VStack {
+                    tabs-shelf := Rectangle {
+                        x: 0px;
+                        y: 4px;
                         width: parent.width;
-                        height: parent.height;
-                        spacing: 10px;
+                        height: 44px;
+                        background: transparent;
 
                         Rectangle {
-                            height: 40px;
-                            background: transparent;
-                            vertical-stretch: 0;
+                            x: 0px;
+                            y: 43px;
+                            width: parent.width;
+                            height: 1px;
+                            background: root.delete-mode ? Theme.danger-border : Theme.panel-divider;
+                        }
+
+                        ScrollView {
+                            width: parent.width;
+                            height: parent.height;
+                            horizontal-scrollbar-policy: as-needed;
+                            vertical-scrollbar-policy: always-off;
 
                             Rectangle {
-                                y: parent.height - 1px;
-                                width: parent.width;
-                                height: 1px;
-                                background: #dfe6f1;
-                            }
-
-                            ScrollView {
-                                width: parent.width;
+                                width: max(parent.width, root.tabs.length * 80px + (root.can-add-tab ? 34px : 0px));
                                 height: parent.height;
-                                horizontal-scrollbar-policy: as-needed;
-                                vertical-scrollbar-policy: always-off;
+                                background: transparent;
 
-                                Rectangle {
-                                    width: root.tabs.length * 88px + (root.can-add-tab ? 40px : 0px);
-                                    height: 38px;
-                                    background: transparent;
-
-                                    for tab[index] in root.tabs : TabChip {
-                                        x: index * 88px;
-                                        y: 0px;
-                                        title: tab.title;
-                                        selected: tab.selected;
-                                        clicked => { root.select-tab(index); }
-                                        double-clicked => { root.request-rename-tab(index); }
-                                        delete-clicked => { root.request-delete-tab(index); }
-                                        drag-dropped(position-x) => { root.reorder-tab(index, position-x); }
-                                    }
-
-                                    if root.can-add-tab : IconButton {
-                                        x: root.tabs.length * 88px;
-                                        y: 1px;
-                                        width: 32px;
-                                        height: 32px;
-                                        border-radius: 10px;
-                                        icon: @image-url("icons/plus.svg");
-                                        clicked => { root.open-add-tab(); }
-                                    }
+                                for tab[index] in root.tabs : TabChip {
+                                    x: index * 80px;
+                                    title: tab.title;
+                                    selected: tab.selected;
+                                    show-divider: false;
+                                    clicked => { root.select-tab(index); }
+                                    double-clicked => { root.request-rename-tab(index); }
+                                    delete-clicked => { root.request-delete-tab(index); }
+                                    drag-dropped(position_x) => { root.reorder-tab(index, position_x); }
                                 }
-                            }
-                        }
 
-                        Rectangle {
-                            background: #ffffff;
-                            border-radius: 16px;
-                            border-width: 1px;
-                            border-color: #dfe6f1;
-                            horizontal-stretch: 1;
-                            vertical-stretch: 1;
-                            clip: true;
-
-                            panel-column := VStack {
-                                width: parent.width;
-                                height: parent.height;
-                                padding: 14px;
-                                spacing: 12px;
-
-                                if root.overlay == OverlayKind.add-tab || root.overlay == OverlayKind.rename-tab : Rectangle {
-                                    height: 86px;
+                                if root.can-add-tab : IconButton {
+                                    x: root.tabs.length * 80px + 4px;
+                                    y: 9px;
+                                    width: 24px;
+                                    height: 24px;
                                     border-radius: 12px;
-                                    border-width: 1px;
-                                    border-color: #e2e8f2;
-                                    background: #fafcff;
-                                    vertical-stretch: 0;
-
-                                    VStack {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        padding: 12px;
-                                        spacing: 8px;
-
-                                        Text {
-                                            text: root.overlay == OverlayKind.add-tab ? "New tab" : "Rename tab";
-                                            color: #1a2640;
-                                            font-size: 13px;
-                                            font-weight: 650;
-                                            height: 16px;
-                                        }
-
-                                        HStack {
-                                            width: parent.width;
-                                            height: 38px;
-                                            spacing: 8px;
-
-                                            TextField {
-                                                text: root.draft-tab-name;
-                                                placeholder: "Tab name";
-                                                horizontal-stretch: 1;
-                                                edited(value) => { root.update-draft-tab-name(value); }
-                                                submitted(value) => { root.submit-tab-form(value); }
-                                            }
-
-                                            TextButton {
-                                                text: "Save";
-                                                width: 78px;
-                                                primary: true;
-                                                enabled: root.draft-tab-name != "";
-                                                clicked => { root.submit-tab-form(root.draft-tab-name); }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if root.overlay == OverlayKind.add-item || root.overlay == OverlayKind.edit-item : Rectangle {
-                                    height: 180px;
-                                    border-radius: 12px;
-                                    border-width: 1px;
-                                    border-color: #e2e8f2;
-                                    background: #fafcff;
-                                    vertical-stretch: 0;
-
-                                    VStack {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        padding: 12px;
-                                        spacing: 8px;
-
-                                        Text {
-                                            text: root.overlay == OverlayKind.add-item ? "New item" : "Edit item";
-                                            color: #1a2640;
-                                            font-size: 13px;
-                                            font-weight: 650;
-                                            height: 16px;
-                                        }
-
-                                        TextField {
-                                            text: root.draft-item-title;
-                                            placeholder: "Title";
-                                            edited(value) => { root.update-draft-item-title(value); }
-                                            submitted(value) => { root.update-draft-item-title(value); }
-                                        }
-
-                                        TextAreaField {
-                                            text: root.draft-item-content;
-                                            placeholder: "Content";
-                                            height: 82px;
-                                            edited(value) => { root.update-draft-item-content(value); }
-                                        }
-
-                                        HStack {
-                                            width: parent.width;
-                                            height: 38px;
-
-                                            Rectangle {
-                                                background: transparent;
-                                                horizontal-stretch: 1;
-                                            }
-
-                                            TextButton {
-                                                text: "Cancel";
-                                                width: 76px;
-                                                clicked => { root.cancel-overlay(); }
-                                            }
-
-                                            TextButton {
-                                                text: root.overlay == OverlayKind.add-item ? "Add" : "Save";
-                                                width: 76px;
-                                                primary: true;
-                                                enabled: root.draft-item-title != "" && root.draft-item-content != "";
-                                                clicked => { root.submit-item-form(root.draft-item-title, root.draft-item-content); }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Rectangle {
-                                    background: transparent;
-                                    horizontal-stretch: 1;
-                                    vertical-stretch: 1;
-
-                                    if root.show-empty-state : Rectangle {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        background: transparent;
-
-                                        VStack {
-                                            x: 26px;
-                                            y: 26px;
-                                            width: parent.width - 52px;
-                                            height: parent.height - 52px;
-                                            spacing: 8px;
-
-                                            Text {
-                                                text: root.empty-title;
-                                                color: #1a2640;
-                                                font-size: 18px;
-                                                font-weight: 700;
-                                                horizontal-alignment: center;
-                                            }
-
-                                            Text {
-                                                text: root.empty-hint;
-                                                color: #78859c;
-                                                font-size: 12px;
-                                                wrap: word-wrap;
-                                                horizontal-alignment: center;
-                                            }
-                                        }
-                                    }
-
-                                    if !root.show-empty-state : ScrollView {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        horizontal-scrollbar-policy: always-off;
-                                        vertical-scrollbar-policy: as-needed;
-
-                                        Rectangle {
-                                            width: parent.width - 8px;
-                                            height: root.items.length * 104px + 8px;
-                                            background: transparent;
-
-                                            for item[index] in root.items : ItemCard {
-                                                x: 0px;
-                                                y: index * 104px;
-                                                width: parent.width - 8px;
-                                                title: item.title;
-                                                preview: item.preview;
-                                                delete-mode: item.can-delete;
-                                                card-clicked => { root.copy-item(index); }
-                                                copy-clicked => { root.copy-item(index); }
-                                                edit-clicked => { root.request-edit-item(index); }
-                                                delete-clicked => { root.request-delete-item(index); }
-                                                drag-dropped(position-y) => { root.reorder-item(index, position-y); }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Rectangle {
-                                    height: 34px;
-                                    background: transparent;
-                                    vertical-stretch: 0;
-
-                                    HStack {
-                                        width: parent.width;
-                                        height: parent.height;
-
-                                        Rectangle {
-                                            background: transparent;
-                                            horizontal-stretch: 1;
-                                        }
-
-                                        if root.show-delete-toggle : IconButton {
-                                            icon: @image-url("icons/delete.svg");
-                                            fill-color: root.delete-mode ? #fff2f4 : #ffffff;
-                                            hover-color: root.delete-mode ? #ffe8ec : #f4f7fc;
-                                            pressed-color: root.delete-mode ? #ffe0e5 : #e8eef8;
-                                            stroke-color: root.delete-mode ? #f2c7cf : #dbe3ef;
-                                            clicked => { root.toggle-delete-mode(); }
-                                        }
-
-                                        if root.can-add-item : IconButton {
-                                            icon: @image-url("icons/plus.svg");
-                                            clicked => { root.open-add-item(); }
-                                        }
-                                    }
+                                    fill-color: transparent;
+                                    hover-color: Theme.brand-accent-soft;
+                                    pressed-color: #ffe3bc;
+                                    stroke-color: transparent;
+                                    icon-size: 13px;
+                                    icon: @image-url("icons/plus.svg");
+                                    clicked => { root.open-add-tab(); }
                                 }
                             }
                         }
                     }
-                }
 
-                if root.active-view == ActiveView.settings : Rectangle {
-                    background: transparent;
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
-
-                    Rectangle {
+                    content-gallery := Rectangle {
                         x: 0px;
-                        y: 0px;
-                        width: 92px;
-                        height: parent.height;
-                        border-radius: 14px;
+                        y: 52px;
+                        width: parent.width;
+                        height: parent.height - 52px;
+                        border-radius: 20px;
                         border-width: 1px;
-                        border-color: #dfe6f1;
-                        background: #f6f8fb;
-
-                        Text {
-                            text: "Settings";
-                            x: 10px;
-                            y: 10px;
-                            color: #7a879d;
-                            font-size: 11px;
-                        }
-
-                        Rectangle {
-                            x: 10px;
-                            y: 30px;
-                            width: parent.width - 20px;
-                            height: 34px;
-                            border-radius: 10px;
-                            background: #ffffff;
-                            border-width: 1px;
-                            border-color: #d7deea;
-
-                            Text {
-                                text: "Basic";
-                                x: 12px;
-                                width: parent.width - 24px;
-                                height: parent.height;
-                                color: #1d2940;
-                                font-size: 13px;
-                                font-weight: 650;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        x: 106px;
-                        y: 0px;
-                        width: parent.width - 106px;
-                        height: parent.height;
-                        border-radius: 16px;
-                        border-width: 1px;
-                        border-color: #dfe6f1;
-                        background: #ffffff;
+                        border-color: root.delete-mode ? Theme.danger-border : Theme.panel-border;
+                        background: Theme.panel-bg;
                         clip: true;
 
-                        Rectangle {
-                            x: 16px;
-                            y: 16px;
-                            width: parent.width - 32px;
-                            height: 86px;
-                            border-radius: 12px;
-                            border-width: 1px;
-                            border-color: #e2e8f2;
-                            background: #fafcff;
+                        VStack {
+                            x: 12px;
+                            y: 14px;
+                            width: parent.width - 24px;
+                            height: parent.height - 26px;
+                            spacing: 0px;
 
-                            Text {
-                                text: "Hotkey";
-                                x: 12px;
-                                y: 12px;
-                                color: #1a2640;
-                                font-size: 13px;
-                                font-weight: 650;
+                            body-zone := Rectangle {
+                                width: parent.width;
+                                vertical-stretch: 1;
+                                background: transparent;
+
+                                if root.show-empty-state : VStack {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    spacing: 8px;
+
+                                    Rectangle {
+                                        vertical-stretch: 1;
+                                        background: transparent;
+                                    }
+
+                                    Text {
+                                        text: root.empty-title;
+                                        x: 12px;
+                                        width: parent.width - 24px;
+                                        color: Theme.text-primary;
+                                        font-size: 18px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: root.empty-hint;
+                                        x: 14px;
+                                        width: parent.width - 28px;
+                                        color: Theme.text-secondary;
+                                        font-size: 12px;
+                                        wrap: word-wrap;
+                                        horizontal-alignment: center;
+                                    }
+
+                                    Rectangle {
+                                        vertical-stretch: 1;
+                                        background: transparent;
+                                    }
+                                }
+
+                                if !root.show-empty-state : ScrollView {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    horizontal-scrollbar-policy: always-off;
+                                    vertical-scrollbar-policy: as-needed;
+
+                                    VStack {
+                                        width: parent.width - 2px;
+                                        spacing: 8px;
+
+                                        for item[index] in root.items : ItemCard {
+                                            width: parent.width - 2px;
+                                            title: item.title;
+                                            preview: item.preview;
+                                            content: item.content;
+                                            delete-mode: item.can-delete;
+                                            editing: item.editing;
+                                            edit-title: root.draft-item-title;
+                                            copy-clicked => { root.copy-item(index); }
+                                            edit-clicked => { root.request-edit-item(index); }
+                                            delete-clicked => { root.request-delete-item(index); }
+                                            edit-title-changed(value) => { root.update-draft-item-title(value); }
+                                            save-edit => { root.save-inline-item-edit(index); }
+                                            cancel-edit => { root.cancel-inline-item-edit(); }
+                                            drag-dropped(position_y) => { root.reorder-item(index, position_y); }
+                                            preview-tooltip-shown(text, anchor_x, anchor_y) => {
+                                                root.preview-tooltip-text = text;
+                                                root.preview-tooltip_x = anchor_x;
+                                                root.preview-tooltip_y = anchor_y;
+                                            }
+                                            preview-tooltip-hidden => {
+                                                root.preview-tooltip-text = "";
+                                                root.preview-tooltip_x = 0px;
+                                                root.preview-tooltip_y = 0px;
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            height: 4px;
+                                            background: transparent;
+                                        }
+                                    }
+                                }
                             }
 
-                            HotkeyCaptureField {
-                                text: root.draft-hotkey;
-                                recording: root.hotkey-recording;
-                                x: 12px;
-                                y: 36px;
-                                width: parent.width - 98px;
-                                height: 38px;
-                                start-recording => { root.begin-hotkey-recording(); }
-                                stop-recording => { root.end-hotkey-recording(); }
-                                capture-hotkey(key, alt, ctrl, shift) => { root.capture-hotkey(key, alt, ctrl, shift); }
+                            action-dock := Rectangle {
+                                width: parent.width;
+                                height: 44px;
+                                background: transparent;
+
+                                Rectangle {
+                                    width: parent.width;
+                                    height: 1px;
+                                    background: Theme.panel-divider;
+                                }
+
+                                tools-group := Rectangle {
+                                    x: parent.width - (root.show-delete-toggle ? (root.can-add-item ? 70px : 30px) : 30px);
+                                    y: 8px;
+                                    width: root.show-delete-toggle ? (root.can-add-item ? 70px : 30px) : 30px;
+                                    height: 28px;
+                                    border-radius: 14px;
+                                    background: Theme.workspace-bg-soft;
+
+                                    if root.show-delete-toggle : ToolGlyphButton {
+                                        x: 0px;
+                                        y: 0px;
+                                        icon: root.delete-mode ? @image-url("icons/done.svg") : @image-url("icons/manage.svg");
+                                        clicked => { root.footer-tooltip-text = ""; root.toggle-delete-mode(); }
+                                        hover-started => {
+                                            root.footer-tooltip-text = root.delete-mode ? "Done" : "Manage";
+                                            root.footer-tooltip-x = self.x + parent.x + self.width / 2;
+                                        }
+                                        hover-ended => { root.footer-tooltip-text = ""; }
+                                    }
+
+                                    if root.show-delete-toggle && root.can-add-item : Rectangle {
+                                        x: 34px;
+                                        y: 6px;
+                                        width: 1px;
+                                        height: 16px;
+                                        background: Theme.panel-divider;
+                                    }
+
+                                    if root.can-add-item : ToolGlyphButton {
+                                        x: root.show-delete-toggle ? 42px : 0px;
+                                        y: 0px;
+                                        icon: @image-url("icons/plus.svg");
+                                        icon-size: 13px;
+                                        clicked => { root.footer-tooltip-text = ""; root.open-add-item(); }
+                                        hover-started => {
+                                            root.footer-tooltip-text = "Add item";
+                                            root.footer-tooltip-x = self.x + parent.x + self.width / 2;
+                                        }
+                                        hover-ended => { root.footer-tooltip-text = ""; }
+                                    }
+                                }
+
+                                if root.footer-tooltip-text != "" : TooltipBubble {
+                                    x: min(max(root.footer-tooltip-x - self.width / 2, 0px), parent.width - self.width);
+                                    y: -26px;
+                                    text: root.footer-tooltip-text;
+                                }
                             }
 
-                            TextButton {
-                                text: "Save";
-                                width: 70px;
-                                x: parent.width - 82px;
-                                y: 36px;
-                                primary: true;
-                                clicked => { root.save-hotkey(root.draft-hotkey); }
-                            }
                         }
 
-                        Rectangle {
-                            x: 16px;
-                            y: 116px;
-                            width: parent.width - 32px;
-                            height: 72px;
-                            border-radius: 12px;
-                            border-width: 1px;
-                            border-color: #e2e8f2;
-                            background: #fafcff;
-
-                            Text {
-                                text: "Startup";
-                                x: 12px;
-                                y: 14px;
-                                color: #1a2640;
-                                font-size: 13px;
-                                font-weight: 650;
-                            }
-
-                            Text {
-                                text: root.launch-at-startup ? "Launch at sign-in" : "Disabled";
-                                x: 12px;
-                                y: 34px;
-                                color: #7a879d;
-                                font-size: 11px;
-                            }
-
-                            ToggleSwitch {
-                                x: parent.width - 54px;
-                                y: 24px;
-                                checked: root.launch-at-startup;
-                                toggled => { root.toggle-launch-at-startup(); }
-                            }
+                        if root.preview-tooltip-text != "" : ContentTooltipBubble {
+                            x: min(max(root.preview-tooltip_x, 12px), parent.width - self.width - 12px);
+                            y: min(root.preview-tooltip_y + 6px, parent.height - self.height - 54px);
+                            width: min(248px, parent.width - 82px);
+                            text: root.preview-tooltip-text;
                         }
 
-                        Rectangle {
-                            x: 16px;
-                            y: 202px;
-                            width: parent.width - 32px;
-                            height: 102px;
-                            border-radius: 12px;
-                            border-width: 1px;
-                            border-color: #e2e8f2;
-                            background: #fafcff;
-
-                            Text {
-                                text: "Config";
-                                x: 12px;
-                                y: 12px;
-                                color: #1a2640;
-                                font-size: 13px;
-                                font-weight: 650;
-                            }
-
-                            TextButton {
-                                text: "Import";
-                                width: 108px;
-                                x: 12px;
-                                y: 38px;
-                                clicked => { root.trigger-import(); }
-                            }
-
-                            TextButton {
-                                text: "Export";
-                                width: 108px;
-                                x: 130px;
-                                y: 38px;
-                                clicked => { root.trigger-export(); }
-                            }
-
-                            Text {
-                                text: "Import overwrites current config.";
-                                x: 12px;
-                                y: 82px;
-                                color: #7a879d;
-                                font-size: 11px;
-                            }
+                        if root.show-copied-toast : TooltipBubble {
+                            x: 12px;
+                            y: parent.height - 56px;
+                            text: root.copied-toast-text;
                         }
+
                     }
                 }
 
                 if root.status-text != "" : Rectangle {
+                    width: parent.width;
                     height: 22px;
                     border-radius: 11px;
-                    background: root.status-is-error ? #fff2f4 : #edf4ff;
-                    vertical-stretch: 0;
+                    background: root.status-is-error ? Theme.danger-bg : Theme.info-bg;
 
                     Text {
                         text: root.status-text;
                         x: 10px;
                         width: parent.width - 20px;
                         height: parent.height;
-                        color: root.status-is-error ? #bf405a : #4b6387;
+                        color: root.status-is-error ? #b44758 : Theme.info-text;
                         font-size: 11px;
                         vertical-alignment: center;
                         overflow: elide;
@@ -1076,61 +1228,216 @@ export component AppWindow inherits Window {
                 }
             }
         }
-
-        if root.overlay == OverlayKind.confirm-delete-item || root.overlay == OverlayKind.confirm-delete-tab : Rectangle {
+        if root.overlay != OverlayKind.none : Rectangle {
             width: parent.width;
             height: parent.height;
             background: #0d1320;
-            opacity: 0.20;
-            TouchArea { width: parent.width; height: parent.height; }
+            opacity: root.overlay == OverlayKind.confirm-delete-item || root.overlay == OverlayKind.confirm-delete-tab ? 0.32 : 0.26;
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                clicked => {
+                    if (root.overlay != OverlayKind.confirm-delete-item && root.overlay != OverlayKind.confirm-delete-tab) {
+                        root.cancel-overlay();
+                    }
+                }
+            }
         }
 
-        if root.overlay == OverlayKind.confirm-delete-item || root.overlay == OverlayKind.confirm-delete-tab : Rectangle {
-            x: 72px;
-            y: 226px;
-            width: parent.width - 144px;
-            height: 164px;
-            border-radius: 24px;
+        if root.overlay == OverlayKind.add-tab || root.overlay == OverlayKind.rename-tab : Rectangle {
+            width: 324px;
+            height: 184px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 - 14px;
+            border-radius: 22px;
             border-width: 1px;
-            border-color: #dbe3ef;
-            background: #ffffff;
+            border-color: Theme.panel-border;
+            background: Theme.panel-bg;
             clip: true;
 
             VStack {
-                width: parent.width;
-                height: parent.height;
-                padding: 18px;
-                spacing: 10px;
+                x: 20px;
+                y: 20px;
+                width: parent.width - 40px;
+                height: parent.height - 40px;
+                spacing: 14px;
+
+                Text {
+                    text: root.overlay == OverlayKind.add-tab ? "New tab" : "Rename tab";
+                    width: parent.width;
+                    color: Theme.text-primary;
+                    font-size: 16px;
+                    font-weight: 700;
+                    height: 22px;
+                }
+
+                TextField {
+                    width: parent.width;
+                    text: root.draft-tab-name;
+                    placeholder: "Tab name";
+                    edited(value) => { root.update-draft-tab-name(value); }
+                    submitted(value) => { root.submit-tab-form(value); }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+                }
+
+                HStack {
+                    width: parent.width;
+                    height: 38px;
+                    spacing: 8px;
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: transparent;
+                    }
+
+                    TextButton {
+                        text: "Cancel";
+                        width: 76px;
+                        clicked => { root.cancel-overlay(); }
+                    }
+
+                    TextButton {
+                        text: root.overlay == OverlayKind.add-tab ? "Add" : "Save";
+                        width: 76px;
+                        primary: true;
+                        enabled: root.draft-tab-name != "";
+                        clicked => { root.submit-tab-form(root.draft-tab-name); }
+                    }
+                }
+            }
+        }
+
+        if root.overlay == OverlayKind.add-item : Rectangle {
+            width: 344px;
+            height: 324px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 - 18px;
+            border-radius: 22px;
+            border-width: 1px;
+            border-color: Theme.panel-border;
+            background: Theme.panel-bg;
+            clip: true;
+
+            content := VStack {
+                x: 20px;
+                y: 20px;
+                width: parent.width - 40px;
+                height: parent.height - 40px;
+                spacing: 12px;
+
+                Text {
+                    text: "New item";
+                    width: parent.width;
+                    color: Theme.text-primary;
+                    font-size: 16px;
+                    font-weight: 700;
+                    height: 22px;
+                }
+
+                TextField {
+                    width: parent.width;
+                    text: root.draft-item-title;
+                    placeholder: "Title";
+                    edited(value) => { root.update-draft-item-title(value); }
+                    submitted(value) => { root.update-draft-item-title(value); }
+                }
+
+                TextAreaField {
+                    width: parent.width;
+                    height: 120px;
+                    text: root.draft-item-content;
+                    placeholder: "Content";
+                    edited(value) => { root.update-draft-item-content(value); }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+                }
+
+                HStack {
+                    width: parent.width;
+                    height: 38px;
+                    spacing: 8px;
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: transparent;
+                    }
+
+                    TextButton {
+                        text: "Cancel";
+                        width: 76px;
+                        clicked => { root.cancel-overlay(); }
+                    }
+
+                    TextButton {
+                        text: "Add";
+                        width: 76px;
+                        primary: true;
+                        enabled: root.draft-item-title != "" && root.draft-item-content != "";
+                        clicked => { root.submit-item-form(root.draft-item-title, root.draft-item-content); }
+                    }
+                }
+            }
+        }
+
+        if root.overlay == OverlayKind.confirm-delete-item || root.overlay == OverlayKind.confirm-delete-tab : Rectangle {
+            width: 304px;
+            height: 188px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 - 12px;
+            border-radius: 24px;
+            border-width: 1px;
+            border-color: Theme.danger-border;
+            background: Theme.panel-bg;
+            clip: true;
+
+            VStack {
+                x: 20px;
+                y: 20px;
+                width: parent.width - 40px;
+                height: parent.height - 40px;
+                spacing: 12px;
 
                 Text {
                     text: root.overlay == OverlayKind.confirm-delete-item ? "Delete item?" : "Delete tab?";
-                    color: #17243b;
+                    width: parent.width;
+                    color: Theme.text-primary;
                     font-size: 17px;
                     font-weight: 700;
-                    height: 20px;
+                    height: 22px;
+                    horizontal-alignment: center;
                 }
 
                 Text {
                     text: root.overlay == OverlayKind.confirm-delete-item
                         ? "This item will be removed."
                         : "This tab and its items will be removed.";
-                    color: #75839a;
+                    width: parent.width;
+                    color: Theme.text-secondary;
                     font-size: 12px;
                     wrap: word-wrap;
+                    horizontal-alignment: center;
                 }
 
                 Rectangle {
-                    background: transparent;
                     vertical-stretch: 1;
+                    background: transparent;
                 }
 
                 HStack {
                     width: parent.width;
                     height: 38px;
+                    spacing: 8px;
 
                     Rectangle {
-                        background: transparent;
                         horizontal-stretch: 1;
+                        background: transparent;
                     }
 
                     TextButton {
@@ -1142,7 +1449,7 @@ export component AppWindow inherits Window {
                     TextButton {
                         text: "Delete";
                         width: 76px;
-                        primary: true;
+                        danger: true;
                         clicked => {
                             if (root.overlay == OverlayKind.confirm-delete-item) {
                                 root.confirm-delete-item();
@@ -1150,6 +1457,274 @@ export component AppWindow inherits Window {
                                 root.confirm-delete-tab();
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: "Quick Paste Settings";
+    width: 368px;
+    height: 456px;
+    no-frame: true;
+    background: #00000000;
+    icon: @image-url("../assets/CopyPasteIcon.png");
+
+    in property <bool> launch-at-startup;
+    in property <bool> hotkey-recording;
+    in-out property <string> draft-hotkey;
+    in property <string> status-text;
+    in property <bool> status-is-error;
+
+    callback start-window-drag;
+    callback drag-window;
+    callback end-window-drag;
+    callback prepare-settings;
+    callback close-settings;
+    callback begin-hotkey-recording;
+    callback end-hotkey-recording;
+    callback capture-hotkey(key: string, alt: bool, ctrl: bool, shift: bool);
+    callback toggle-launch-at-startup;
+    callback save-hotkey(value: string);
+    callback trigger-import;
+    callback trigger-export;
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+
+        Rectangle {
+            x: 12px;
+            y: 12px;
+            width: parent.width - 24px;
+            height: parent.height - 24px;
+            border-radius: 28px;
+            border-width: 1px;
+            border-color: Theme.panel-border;
+            background: Theme.surface-bg;
+            clip: true;
+
+            content := VStack {
+                x: 18px;
+                y: 18px;
+                width: parent.width - 36px;
+                height: parent.height - 36px;
+                spacing: 10px;
+
+                header-zone := Rectangle {
+                    width: parent.width;
+                    height: 62px;
+                    background: transparent;
+
+                    header-band := Rectangle {
+                        width: parent.width;
+                        height: 44px;
+                        border-radius: 16px;
+                        background: transparent;
+
+                        TouchArea {
+                            width: parent.width - 44px;
+                            height: parent.height;
+                            moved => {
+                                if (self.pressed) {
+                                    root.drag-window();
+                                }
+                            }
+                            changed pressed => {
+                                if (self.pressed) {
+                                    root.start-window-drag();
+                                } else {
+                                    root.end-window-drag();
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: "Settings";
+                            x: 14px;
+                            y: 8px;
+                            width: parent.width - 68px;
+                            color: Theme.text-primary;
+                            font-size: 17px;
+                            font-weight: 700;
+                            height: 20px;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: "Shortcut and config";
+                            x: 14px;
+                            y: 27px;
+                            width: parent.width - 68px;
+                            color: Theme.text-secondary;
+                            font-size: 10px;
+                            height: 12px;
+                            overflow: elide;
+                        }
+
+                        BareCloseButton {
+                            x: parent.width - 32px;
+                            y: 8px;
+                            clicked => { root.close-settings(); }
+                        }
+                    }
+
+                    Rectangle {
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.panel-divider;
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width;
+                    height: 78px;
+                    background: transparent;
+
+                    Text {
+                        text: "Hotkey";
+                        x: 8px;
+                        y: 6px;
+                        color: Theme.text-primary;
+                        font-size: 13px;
+                        font-weight: 700;
+                        height: 16px;
+                    }
+
+                    HStack {
+                        x: 8px;
+                        y: 32px;
+                        width: parent.width - 16px;
+                        height: 38px;
+                        spacing: 8px;
+
+                        HotkeyCaptureField {
+                            text: root.draft-hotkey;
+                            recording: root.hotkey-recording;
+                            horizontal-stretch: 1;
+                            start-recording => { root.begin-hotkey-recording(); }
+                            stop-recording => { root.end-hotkey-recording(); }
+                            capture-hotkey(key, alt, ctrl, shift) => { root.capture-hotkey(key, alt, ctrl, shift); }
+                        }
+
+                        TextButton {
+                            text: "Save";
+                            width: 76px;
+                            primary: true;
+                            clicked => { root.save-hotkey(root.draft-hotkey); }
+                        }
+                    }
+                }
+
+                SoftSectionDivider {
+                    x: 8px;
+                    width: parent.width - 16px;
+                }
+
+                Rectangle {
+                    width: parent.width;
+                    height: 64px;
+                    background: transparent;
+
+                    Text {
+                        text: "Startup";
+                        x: 8px;
+                        y: 6px;
+                        color: Theme.text-primary;
+                        font-size: 13px;
+                        font-weight: 700;
+                        height: 16px;
+                    }
+
+                    HStack {
+                        x: 8px;
+                        y: 24px;
+                        width: parent.width - 16px;
+                        height: 30px;
+                        spacing: 10px;
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: transparent;
+                        }
+
+                        ToggleSwitch {
+                            checked: root.launch-at-startup;
+                            toggled => { root.toggle-launch-at-startup(); }
+                        }
+                    }
+                }
+
+                SoftSectionDivider {
+                    x: 8px;
+                    width: parent.width - 16px;
+                }
+
+                Rectangle {
+                    width: parent.width;
+                    height: 96px;
+                    background: transparent;
+
+                    Text {
+                        text: "Config";
+                        x: 8px;
+                        y: 6px;
+                        color: Theme.text-primary;
+                        font-size: 13px;
+                        font-weight: 700;
+                        height: 16px;
+                    }
+
+                    HStack {
+                        x: 8px;
+                        y: 32px;
+                        width: parent.width - 16px;
+                        height: 38px;
+                        spacing: 10px;
+
+                        TextButton {
+                            text: "Import";
+                            horizontal-stretch: 1;
+                            clicked => { root.trigger-import(); }
+                        }
+
+                        TextButton {
+                            text: "Export";
+                            horizontal-stretch: 1;
+                            clicked => { root.trigger-export(); }
+                        }
+                    }
+
+                    Text {
+                        text: "Import replaces local config.";
+                        x: 8px;
+                        y: 78px;
+                        width: parent.width - 16px;
+                        color: Theme.text-secondary;
+                        font-size: 11px;
+                        height: 14px;
+                    }
+                }
+
+                if root.status-text != "" : Rectangle {
+                    width: parent.width;
+                    height: 22px;
+                    border-radius: 11px;
+                    background: root.status-is-error ? Theme.danger-bg : Theme.info-bg;
+
+                    Text {
+                        text: root.status-text;
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        color: root.status-is-error ? #b44758 : Theme.info-text;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
             }

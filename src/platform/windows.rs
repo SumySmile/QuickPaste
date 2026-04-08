@@ -7,31 +7,43 @@ use std::thread;
 use std::time::Duration;
 
 use windows::Win32::Foundation::{
-    ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, HINSTANCE,
+    HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
     RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW,
 };
+use windows::Win32::System::Threading::{
+    AttachThreadInput, CreateEventW, CreateMutexW, GetCurrentThreadId, INFINITE, SetEvent,
+    WaitForSingleObject,
+};
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, GetSaveFileNameW, OFN_FILEMUSTEXIST, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
     OPENFILENAMEW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, RegisterHotKey, UnregisterHotKey, VK_F1,
+    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, RegisterHotKey, SetActiveWindow, SetFocus,
+    UnregisterHotKey, VK_F1,
 };
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CREATESTRUCTW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW,
-    IDI_APPLICATION, LoadIconW, MB_ICONQUESTION, MB_OKCANCEL, MF_STRING, MSG, MessageBoxW,
-    PM_NOREMOVE, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW,
-    SetForegroundWindow, SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
-    TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_HOTKEY, WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+    ASFW_ANY, AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, CREATESTRUCTW,
+    CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
+    FindWindowW, GWLP_USERDATA, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW,
+    GetWindowThreadProcessId, ICON_BIG, ICON_SMALL, IDI_APPLICATION, LoadIconW,
+    MB_ICONQUESTION, MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PM_NOREMOVE, PM_REMOVE,
+    PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW, SW_RESTORE, SW_SHOW,
+    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY,
+    WM_RBUTTONUP, WM_SETICON, WNDCLASSW, WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -40,12 +52,15 @@ use crate::error::AppError;
 const HOTKEY_ID: i32 = 1;
 const TRAY_ICON_ID: u32 = 1;
 const TRAY_CALLBACK_MESSAGE: u32 = WM_APP + 1;
+const TRAY_ACTIVATE_MESSAGE: u32 = WM_APP + 2;
 const TRAY_MENU_SETTINGS_ID: usize = 1001;
 const TRAY_MENU_CLOSE_ID: usize = 1002;
 const TRAY_CLASS_NAME: &str = "MyQuickPasteTrayWindow";
 const TRAY_TOOLTIP: &str = "Quick Paste";
 const RUN_KEY_PATH: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE_NAME: &str = "MyQuickPaste";
+const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\MyQuickPasteSlintMutex";
+const SINGLE_INSTANCE_EVENT_NAME: &str = "Local\\MyQuickPasteSlintActivateEvent";
 
 #[derive(Clone, Debug)]
 pub struct HotkeySpec {
@@ -65,6 +80,15 @@ pub struct HotkeyManager {
 
 pub struct TrayIconManager {
     hwnd: HWND,
+}
+
+pub struct SingleInstance {
+    _mutex: HANDLE,
+}
+
+pub enum SingleInstanceState {
+    Primary(SingleInstance),
+    Secondary,
 }
 
 type TrayCallback = Box<dyn Fn() + Send + 'static>;
@@ -215,6 +239,55 @@ impl Drop for TrayIconManager {
     }
 }
 
+impl SingleInstance {
+    pub fn start(on_activate: impl Fn() + Send + 'static) -> Result<SingleInstanceState, AppError> {
+        let mutex_name = wide(SINGLE_INSTANCE_MUTEX_NAME);
+        let event_name = wide(SINGLE_INSTANCE_EVENT_NAME);
+
+        unsafe {
+            let mutex = CreateMutexW(None, false, PCWSTR(mutex_name.as_ptr())).map_err(|err| {
+                AppError::validation(format!("Failed to create instance mutex: {err}"))
+            })?;
+            let already_exists = windows::Win32::Foundation::GetLastError() == ERROR_ALREADY_EXISTS;
+
+            let event =
+                CreateEventW(None, false, false, PCWSTR(event_name.as_ptr())).map_err(|err| {
+                    let _ = CloseHandle(mutex);
+                    AppError::validation(format!("Failed to create activation event: {err}"))
+                })?;
+
+            if already_exists {
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
+                let _ = SetEvent(event);
+                let _ = notify_running_instance_activate();
+                thread::sleep(Duration::from_millis(160));
+                let _ = bring_window_to_front(TRAY_TOOLTIP);
+                let _ = CloseHandle(event);
+                let _ = CloseHandle(mutex);
+                return Ok(SingleInstanceState::Secondary);
+            }
+
+            let event_raw = event.0 as isize;
+            thread::spawn(move || {
+                loop {
+                    let event = HANDLE(event_raw as *mut _);
+                    let status = WaitForSingleObject(event, INFINITE);
+                    if status.0 == 0 {
+                        on_activate();
+                    } else {
+                        let _ = CloseHandle(event);
+                        break;
+                    }
+                }
+            });
+
+            Ok(SingleInstanceState::Primary(SingleInstance {
+                _mutex: mutex,
+            }))
+        }
+    }
+}
+
 pub fn parse_hotkey(value: &str) -> Result<HotkeySpec, AppError> {
     let mut modifiers = HOT_KEY_MODIFIERS(0);
     let mut key_name = None;
@@ -319,6 +392,88 @@ pub fn current_cursor_position() -> Result<(i32, i32), AppError> {
     Ok((point.x, point.y))
 }
 
+pub fn current_monitor_work_area() -> Result<(i32, i32, i32, i32), AppError> {
+    unsafe {
+        let mut point = POINT::default();
+        let _ = GetCursorPos(&mut point);
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTOPRIMARY);
+        let mut monitor_info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+
+        if !GetMonitorInfoW(monitor, &mut monitor_info).as_bool() {
+            return Err(AppError::validation("Failed to read monitor work area."));
+        }
+
+        let work = monitor_info.rcWork;
+        Ok((work.left, work.top, work.right, work.bottom))
+    }
+}
+
+pub fn bring_window_to_front(title: &str) -> Result<(), AppError> {
+    let title = wide(title);
+
+    unsafe {
+        let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) else {
+            return Ok(());
+        };
+
+        let foreground = GetForegroundWindow();
+        let current_thread = GetCurrentThreadId();
+        let foreground_thread = if foreground.0.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, None)
+        };
+        let attached = foreground_thread != 0 && foreground_thread != current_thread;
+        if attached {
+            let _ = AttachThreadInput(foreground_thread, current_thread, true);
+        }
+
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetActiveWindow(hwnd);
+        let _ = SetFocus(Some(hwnd));
+        let _ = SetForegroundWindow(hwnd);
+
+        if attached {
+            let _ = AttachThreadInput(foreground_thread, current_thread, false);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn apply_app_icon_to_window(title: &str) -> Result<(), AppError> {
+    let title = wide(title);
+
+    unsafe {
+        let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) else {
+            return Ok(());
+        };
+
+        let module = GetModuleHandleW(None)
+            .map_err(|err| AppError::validation(format!("Failed to load module handle: {err}")))?;
+        let icon = load_app_icon(HINSTANCE(module.0))?;
+        let _ = SendMessageW(
+            hwnd,
+            WM_SETICON,
+            Some(WPARAM(ICON_SMALL as usize)),
+            Some(LPARAM(icon.0 as isize)),
+        );
+        let _ = SendMessageW(
+            hwnd,
+            WM_SETICON,
+            Some(WPARAM(ICON_BIG as usize)),
+            Some(LPARAM(icon.0 as isize)),
+        );
+    }
+
+    Ok(())
+}
+
 pub fn set_launch_at_startup(enabled: bool) -> Result<(), AppError> {
     if enabled {
         set_run_value(&quoted_current_exe()?)
@@ -389,7 +544,8 @@ fn load_app_icon(
     instance: HINSTANCE,
 ) -> Result<windows::Win32::UI::WindowsAndMessaging::HICON, AppError> {
     unsafe {
-        LoadIconW(Some(instance), PCWSTR(1 as *const u16))
+        LoadIconW(Some(instance), IDI_APPLICATION)
+            .or_else(|_| LoadIconW(Some(instance), PCWSTR(1 as *const u16)))
             .or_else(|_| LoadIconW(None, IDI_APPLICATION))
             .map_err(|err| AppError::validation(format!("Failed to load app icon: {err}")))
     }
@@ -487,6 +643,13 @@ unsafe extern "system" fn tray_window_proc(
 
             LRESULT(0)
         }
+        TRAY_ACTIVATE_MESSAGE => {
+            let Some(state) = tray_state(hwnd) else {
+                return LRESULT(0);
+            };
+            (state.on_activate)();
+            LRESULT(0)
+        }
         WM_DESTROY => {
             remove_tray_icon(hwnd);
             unsafe {
@@ -508,6 +671,18 @@ unsafe extern "system" fn tray_window_proc(
         }
         _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
     }
+}
+
+fn notify_running_instance_activate() -> Result<(), AppError> {
+    let class_name = wide(TRAY_CLASS_NAME);
+    unsafe {
+        let hwnd = FindWindowW(PCWSTR(class_name.as_ptr()), PCWSTR::null())
+            .map_err(|err| AppError::validation(format!("Failed to find tray window: {err}")))?;
+        if !hwnd.0.is_null() {
+            let _ = PostMessageW(Some(hwnd), TRAY_ACTIVATE_MESSAGE, WPARAM(0), LPARAM(0));
+        }
+    }
+    Ok(())
 }
 
 fn tray_state(hwnd: HWND) -> Option<&'static TrayWindowState> {
@@ -747,5 +922,3 @@ mod tests {
         assert!(parse_hotkey("V").is_err());
     }
 }
-
-

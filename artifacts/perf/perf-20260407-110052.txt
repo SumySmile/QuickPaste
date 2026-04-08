@@ -1,0 +1,6 @@
+﻿target_pattern=MyQuickPaste*
+interval_ms=200
+duration_minutes=0
+started_at=2026-04-07T11:00:52.1806501+08:00
+cpu_count=12
+finished_at=2026-04-07T11:00:52.1898481+08:00

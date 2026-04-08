@@ -7,8 +7,8 @@ use crate::error::AppError;
 
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
 pub const DEFAULT_HOTKEY: &str = "Alt+V";
-pub const MAX_TABS: usize = 5;
-pub const MAX_ITEMS_PER_TAB: usize = 10;
+pub const MAX_TABS: usize = 4;
+pub const MAX_ITEMS_PER_TAB: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {

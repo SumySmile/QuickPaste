@@ -1,36 +1,66 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use arboard::Clipboard;
-use slint::{CloseRequestResponse, ComponentHandle, ModelRc, PhysicalPosition, VecModel, Weak};
+use slint::{
+    CloseRequestResponse, ComponentHandle, ModelRc, PhysicalPosition, PhysicalSize, Timer, VecModel,
+    Weak,
+};
 
 use crate::config::{AppConfig, MAX_ITEMS_PER_TAB, MAX_TABS};
 use crate::error::AppError;
 use crate::paths::AppPaths;
 use crate::platform::{
-    HotkeyManager, TrayIconManager, choose_open_path, choose_save_path, confirm,
-    current_cursor_position, parse_hotkey, set_launch_at_startup,
+    HotkeyManager, SingleInstance, SingleInstanceState, TrayIconManager, apply_app_icon_to_window,
+    bring_window_to_front, choose_open_path, choose_save_path, confirm, current_cursor_position,
+    current_monitor_work_area, parse_hotkey, set_launch_at_startup,
 };
-use crate::{ActiveView, AppWindow, ItemViewData, OverlayKind, TabViewData};
+use crate::{AppWindow, ItemViewData, OverlayKind, SettingsWindow, TabViewData};
 
-const TAB_DROP_SLOT_WIDTH: f32 = 92.0;
-const ITEM_DROP_SLOT_HEIGHT: f32 = 104.0;
+const TAB_DROP_SLOT_WIDTH: f32 = 80.0;
+const ITEM_DROP_SLOT_HEIGHT: f32 = 80.0;
+const HOME_WINDOW_TITLE: &str = "Quick Paste";
+const SETTINGS_WINDOW_TITLE: &str = "Quick Paste Settings";
+const HOME_WINDOW_WIDTH: i32 = 440;
+const HOME_WINDOW_HEIGHT: i32 = 664;
+const SETTINGS_WINDOW_WIDTH: i32 = 368;
+const SETTINGS_WINDOW_HEIGHT: i32 = 456;
 
 pub fn run() -> Result<(), AppError> {
     let paths = AppPaths::discover()?;
     let config = AppConfig::load_or_default(&paths.config_path)?;
-    let hotkey = parse_hotkey(&config.hotkey)?;
 
     let window = AppWindow::new()
         .map_err(|err| AppError::validation(format!("Failed to create the Slint window: {err}")))?;
+    let settings_window = SettingsWindow::new().map_err(|err| {
+        AppError::validation(format!("Failed to create the Slint settings window: {err}"))
+    })?;
 
     window
         .window()
         .on_close_requested(|| CloseRequestResponse::HideWindow);
+    settings_window
+        .window()
+        .on_close_requested(|| CloseRequestResponse::HideWindow);
 
+    let activation_weak = window.as_weak();
+    let activation_settings_weak = settings_window.as_weak();
+    let _single_instance = match SingleInstance::start({
+        let weak = activation_weak.clone();
+        let settings_weak = activation_settings_weak.clone();
+        move || show_home_from_tray(&weak, &settings_weak)
+    })? {
+        SingleInstanceState::Primary(manager) => manager,
+        SingleInstanceState::Secondary => return Ok(()),
+    };
+
+    let hotkey = parse_hotkey(&config.hotkey)?;
     let hotkey_weak = window.as_weak();
-    let hotkey_manager =
-        HotkeyManager::start(hotkey, move || toggle_window_visibility(&hotkey_weak))?;
+    let settings_weak = settings_window.as_weak();
+    let hotkey_manager = HotkeyManager::start(hotkey, move || {
+        toggle_window_visibility(&hotkey_weak, &settings_weak)
+    })?;
 
     let controller = Rc::new(RefCell::new(AppController::new(
         paths,
@@ -38,24 +68,33 @@ pub fn run() -> Result<(), AppError> {
         hotkey_manager,
     )));
     controller.borrow().sync_window(&window);
-    wire_callbacks(&window, &controller);
+    controller.borrow().sync_settings_window(&settings_window);
+    wire_callbacks(&window, &settings_window, &controller);
+    wire_settings_callbacks(&settings_window, &window, &controller);
 
     let tray_weak = window.as_weak();
+    let tray_settings_weak = settings_window.as_weak();
     let _tray_manager = TrayIconManager::start(
         {
             let weak = tray_weak.clone();
-            move || show_home_from_tray(&weak)
+            let settings_weak = tray_settings_weak.clone();
+            move || show_home_from_tray(&weak, &settings_weak)
         },
         {
             let weak = tray_weak.clone();
-            move || show_settings_from_tray(&weak)
+            let settings_weak = tray_settings_weak.clone();
+            move || show_settings_from_tray(&weak, &settings_weak)
         },
         move || quit_from_tray(),
     )?;
 
-    window
-        .show()
-        .map_err(|err| AppError::validation(format!("Failed to show the Slint window: {err}")))?;
+    window.invoke_open_home();
+    show_component_window(
+        &window,
+        HOME_WINDOW_TITLE,
+        (HOME_WINDOW_WIDTH, HOME_WINDOW_HEIGHT),
+    )
+    .map_err(|err| AppError::validation(format!("Failed to show the Slint window: {err}")))?;
 
     slint::run_event_loop_until_quit()
         .map_err(|err| AppError::validation(format!("Failed to run the Slint event loop: {err}")))
@@ -66,7 +105,6 @@ struct AppController {
     config: AppConfig,
     hotkey_manager: HotkeyManager,
     selected_tab: Option<usize>,
-    active_view: ActiveView,
     overlay: OverlayKind,
     delete_mode: bool,
     pending_delete_item: Option<usize>,
@@ -81,6 +119,9 @@ struct AppController {
     drag_origin_window: Option<PhysicalPosition>,
     status_text: String,
     status_is_error: bool,
+    status_revision: u64,
+    copied_toast_text: String,
+    copied_toast_revision: u64,
 }
 
 impl AppController {
@@ -96,7 +137,6 @@ impl AppController {
             },
             config,
             hotkey_manager,
-            active_view: ActiveView::Home,
             overlay: OverlayKind::None,
             delete_mode: false,
             pending_delete_item: None,
@@ -109,6 +149,9 @@ impl AppController {
             drag_origin_window: None,
             status_text: String::new(),
             status_is_error: false,
+            status_revision: 0,
+            copied_toast_text: String::new(),
+            copied_toast_revision: 0,
         };
 
         if let Err(err) = set_launch_at_startup(controller.config.launch_at_startup) {
@@ -119,17 +162,14 @@ impl AppController {
     }
 
     fn sync_window(&self, window: &AppWindow) {
-        window.set_active_view(self.active_view);
         window.set_overlay(self.overlay);
         window.set_delete_mode(self.delete_mode);
         window.set_has_tabs(!self.config.tabs.is_empty());
         window.set_has_current_tab(self.selected_tab.is_some());
         window.set_status_text(self.status_text.clone().into());
         window.set_status_is_error(self.status_is_error);
-        window.set_hotkey(self.config.hotkey.clone().into());
-        window.set_hotkey_recording(self.hotkey_recording);
-        window.set_launch_at_startup(self.config.launch_at_startup);
-        window.set_draft_hotkey(self.draft_hotkey.clone().into());
+        window.set_copied_toast_text(self.copied_toast_text.clone().into());
+        window.set_show_copied_toast(!self.copied_toast_text.is_empty());
         window.set_draft_tab_name(self.draft_tab_name.clone().into());
         window.set_draft_item_title(self.draft_item_title.clone().into());
         window.set_draft_item_content(self.draft_item_content.clone().into());
@@ -152,6 +192,14 @@ impl AppController {
         window.set_items(ModelRc::from(Rc::new(VecModel::from(self.item_rows()))));
     }
 
+    fn sync_settings_window(&self, window: &SettingsWindow) {
+        window.set_status_text(self.status_text.clone().into());
+        window.set_status_is_error(self.status_is_error);
+        window.set_hotkey_recording(self.hotkey_recording);
+        window.set_launch_at_startup(self.config.launch_at_startup);
+        window.set_draft_hotkey(self.draft_hotkey.clone().into());
+    }
+
     fn tab_rows(&self) -> Vec<TabViewData> {
         self.config
             .tabs
@@ -167,10 +215,13 @@ impl AppController {
     fn item_rows(&self) -> Vec<ItemViewData> {
         self.current_items()
             .iter()
-            .map(|item| ItemViewData {
+            .enumerate()
+            .map(|(index, item)| ItemViewData {
                 title: item.title.clone().into(),
                 preview: preview_text(&item.content).into(),
+                content: item.content.clone().into(),
                 can_delete: self.delete_mode,
+                editing: Some(index) == self.editing_item_index,
             })
             .collect()
     }
@@ -193,11 +244,23 @@ impl AppController {
     fn set_status(&mut self, message: impl Into<String>, is_error: bool) {
         self.status_text = message.into();
         self.status_is_error = is_error;
+        self.status_revision = self.status_revision.wrapping_add(1);
     }
 
     fn clear_status(&mut self) {
         self.status_text.clear();
         self.status_is_error = false;
+        self.status_revision = self.status_revision.wrapping_add(1);
+    }
+
+    fn set_copied_toast(&mut self, message: impl Into<String>) {
+        self.copied_toast_text = message.into();
+        self.copied_toast_revision = self.copied_toast_revision.wrapping_add(1);
+    }
+
+    fn clear_copied_toast(&mut self) {
+        self.copied_toast_text.clear();
+        self.copied_toast_revision = self.copied_toast_revision.wrapping_add(1);
     }
 
     fn persist_config(&mut self) {
@@ -228,16 +291,12 @@ impl AppController {
     }
 
     fn open_settings(&mut self) {
-        self.active_view = ActiveView::Settings;
-        self.reset_overlay_state();
-        self.delete_mode = false;
         self.draft_hotkey = self.config.hotkey.clone();
         self.hotkey_recording = false;
         self.clear_status();
     }
 
     fn open_home(&mut self) {
-        self.active_view = ActiveView::Home;
         self.reset_overlay_state();
         self.delete_mode = false;
         self.stop_window_drag();
@@ -245,8 +304,6 @@ impl AppController {
     }
 
     fn close_settings(&mut self) {
-        self.active_view = ActiveView::Home;
-        self.reset_overlay_state();
         self.hotkey_recording = false;
         self.clear_status();
     }
@@ -371,28 +428,25 @@ impl AppController {
         let Some(tab_index) = self.selected_tab else {
             return;
         };
-        let Some((title, content)) = self
+        let Some(title) = self
             .config
             .tabs
             .get(tab_index)
             .and_then(|tab| tab.items.get(index))
-            .map(|item| (item.title.clone(), item.content.clone()))
+            .map(|item| item.title.clone())
         else {
             return;
         };
 
         self.reset_overlay_state();
-        self.overlay = OverlayKind::EditItem;
         self.editing_item_index = Some(index);
         self.draft_item_title = title;
-        self.draft_item_content = content;
         self.clear_status();
     }
 
     fn submit_item_form(&mut self, title: String, content: String) {
         match self.overlay {
             OverlayKind::AddItem => self.add_item(title, content),
-            OverlayKind::EditItem => self.edit_item(title, content),
             _ => {}
         }
     }
@@ -417,7 +471,7 @@ impl AppController {
         }
     }
 
-    fn edit_item(&mut self, title: String, content: String) {
+    fn edit_item(&mut self, title: String, _content: String) {
         let Some(tab_index) = self.selected_tab else {
             return;
         };
@@ -435,18 +489,35 @@ impl AppController {
         };
 
         item.title = title.trim().to_string();
-        item.content = content.trim().to_string();
 
         match self.config.validate() {
             Ok(()) => {
                 self.reset_overlay_state();
                 self.persist_config();
                 if !self.status_is_error {
-                    self.set_status("Item updated.", false);
+                    self.clear_status();
                 }
             }
             Err(err) => self.set_status(err.to_string(), true),
         }
+    }
+
+    fn save_inline_item_edit(&mut self) {
+        if self.editing_item_index.is_none() {
+            return;
+        }
+
+        self.edit_item(self.draft_item_title.clone(), String::new());
+    }
+
+    fn cancel_inline_item_edit(&mut self) {
+        if self.editing_item_index.is_none() {
+            return;
+        }
+
+        self.editing_item_index = None;
+        self.draft_item_title.clear();
+        self.clear_status();
     }
 
     fn toggle_delete_mode(&mut self) {
@@ -524,7 +595,7 @@ impl AppController {
             return;
         }
 
-        let target_index = drop_target_index(position_y - 12.0, ITEM_DROP_SLOT_HEIGHT, item_count);
+        let target_index = drop_target_index(position_y, ITEM_DROP_SLOT_HEIGHT, item_count);
         if target_index == from_index {
             return;
         }
@@ -565,10 +636,6 @@ impl AppController {
         if !self.status_is_error {
             self.set_status("Hotkey saved.", false);
         }
-    }
-
-    fn update_draft_hotkey(&mut self, value: String) {
-        self.draft_hotkey = value;
     }
 
     fn begin_hotkey_recording(&mut self) {
@@ -655,7 +722,7 @@ impl AppController {
 
         match Clipboard::new().and_then(|mut clipboard| clipboard.set_text(item.content.clone())) {
             Ok(()) => {
-                self.set_status("Copied.", false);
+                self.set_copied_toast("Copied.");
                 true
             }
             Err(err) => {
@@ -665,7 +732,7 @@ impl AppController {
         }
     }
 
-    fn start_window_drag(&mut self, window: &AppWindow) {
+    fn start_window_drag<C: ComponentHandle>(&mut self, window: &C) {
         let Ok((cursor_x, cursor_y)) = current_cursor_position() else {
             return;
         };
@@ -674,7 +741,7 @@ impl AppController {
         self.drag_origin_window = Some(window.window().position());
     }
 
-    fn drag_window(&mut self, window: &AppWindow) {
+    fn drag_window<C: ComponentHandle>(&mut self, window: &C) {
         let (Some((origin_cursor_x, origin_cursor_y)), Some(origin_window)) =
             (self.drag_origin_cursor, self.drag_origin_window)
         else {
@@ -696,13 +763,13 @@ impl AppController {
         self.drag_origin_window = None;
     }
 
-    fn import_config(&mut self) {
+    fn import_config(&mut self) -> bool {
         let Some(path) = choose_open_path() else {
-            return;
+            return false;
         };
 
         if !confirm("Import replaces the current local config. Continue?") {
-            return;
+            return false;
         }
 
         match AppConfig::load_from_path(&path) {
@@ -711,18 +778,18 @@ impl AppController {
                     Ok(parsed) => parsed,
                     Err(err) => {
                         self.set_status(err.to_string(), true);
-                        return;
+                        return false;
                     }
                 };
 
                 if let Err(err) = self.hotkey_manager.update(parsed.clone()) {
                     self.set_status(err.to_string(), true);
-                    return;
+                    return false;
                 }
 
                 if let Err(err) = set_launch_at_startup(config.launch_at_startup) {
                     self.set_status(err.to_string(), true);
-                    return;
+                    return false;
                 }
 
                 self.config = config;
@@ -732,15 +799,18 @@ impl AppController {
                 } else {
                     Some(0)
                 };
-                self.active_view = ActiveView::Home;
                 self.reset_overlay_state();
                 self.delete_mode = false;
                 self.persist_config();
                 if !self.status_is_error {
                     self.set_status("Config imported.", false);
                 }
+                true
             }
-            Err(err) => self.set_status(err.to_string(), true),
+            Err(err) => {
+                self.set_status(err.to_string(), true);
+                false
+            }
         }
     }
 
@@ -756,8 +826,104 @@ impl AppController {
     }
 }
 
-fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
+fn sync_main_and_settings(
+    controller: &Rc<RefCell<AppController>>,
+    main_weak: &Weak<AppWindow>,
+    settings_weak: &Weak<SettingsWindow>,
+) {
+    if let Some(window) = main_weak.upgrade() {
+        controller.borrow().sync_window(&window);
+    }
+    if let Some(window) = settings_weak.upgrade() {
+        controller.borrow().sync_settings_window(&window);
+    }
+}
+
+fn schedule_status_timeout(
+    controller: &Rc<RefCell<AppController>>,
+    main_weak: &Weak<AppWindow>,
+    settings_weak: &Weak<SettingsWindow>,
+) {
+    let (status_text, status_is_error, status_revision) = {
+        let controller = controller.borrow();
+        (
+            controller.status_text.clone(),
+            controller.status_is_error,
+            controller.status_revision,
+        )
+    };
+
+    if status_text.is_empty() {
+        return;
+    }
+
+    let timeout = if status_is_error {
+        Duration::from_secs(5)
+    } else {
+        Duration::from_secs(3)
+    };
+
+    let controller = controller.clone();
+    let main_weak = main_weak.clone();
+    let settings_weak = settings_weak.clone();
+    Timer::single_shot(timeout, move || {
+        let should_clear = {
+            let controller = controller.borrow();
+            controller.status_revision == status_revision && !controller.status_text.is_empty()
+        };
+
+        if !should_clear {
+            return;
+        }
+
+        controller.borrow_mut().clear_status();
+        sync_main_and_settings(&controller, &main_weak, &settings_weak);
+    });
+}
+
+fn schedule_copied_toast_timeout(
+    controller: &Rc<RefCell<AppController>>,
+    main_weak: &Weak<AppWindow>,
+    settings_weak: &Weak<SettingsWindow>,
+) {
+    let (copied_toast_text, copied_toast_revision) = {
+        let controller = controller.borrow();
+        (
+            controller.copied_toast_text.clone(),
+            controller.copied_toast_revision,
+        )
+    };
+
+    if copied_toast_text.is_empty() {
+        return;
+    }
+
+    let controller = controller.clone();
+    let main_weak = main_weak.clone();
+    let settings_weak = settings_weak.clone();
+    Timer::single_shot(Duration::from_millis(1200), move || {
+        let should_clear = {
+            let controller = controller.borrow();
+            controller.copied_toast_revision == copied_toast_revision
+                && !controller.copied_toast_text.is_empty()
+        };
+
+        if !should_clear {
+            return;
+        }
+
+        controller.borrow_mut().clear_copied_toast();
+        sync_main_and_settings(&controller, &main_weak, &settings_weak);
+    });
+}
+
+fn wire_callbacks(
+    window: &AppWindow,
+    settings_window: &SettingsWindow,
+    controller: &Rc<RefCell<AppController>>,
+) {
     let weak = window.as_weak();
+    let settings_weak = settings_window.as_weak();
 
     {
         let controller = controller.clone();
@@ -795,13 +961,13 @@ fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
     {
         let controller = controller.clone();
         let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
         window.on_reorder_tab(move |index, position_x| {
             controller
                 .borrow_mut()
                 .reorder_tab(index as usize, position_x);
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
         });
     }
 
@@ -846,90 +1012,33 @@ fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
     {
         let controller = controller.clone();
         let weak = weak.clone();
-        window.on_begin_hotkey_recording(move || {
-            controller.borrow_mut().begin_hotkey_recording();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
-        window.on_end_hotkey_recording(move || {
-            controller.borrow_mut().end_hotkey_recording();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
-        window.on_capture_hotkey(move |key, alt, ctrl, shift| {
-            controller
-                .borrow_mut()
-                .capture_hotkey(key.to_string(), alt, ctrl, shift);
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
-        window.on_open_settings(move || {
-            controller.borrow_mut().open_settings();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
-        window.on_close_settings(move || {
-            controller.borrow_mut().close_settings();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
         window.on_open_add_tab(move || {
             controller.borrow_mut().open_add_tab();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
         });
     }
 
     {
         let controller = controller.clone();
         let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
         window.on_submit_tab_form(move |name| {
             controller.borrow_mut().submit_tab_form(name.to_string());
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
         });
     }
 
     {
         let controller = controller.clone();
         let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
         window.on_open_add_item(move || {
             controller.borrow_mut().open_add_item();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
         });
     }
 
@@ -947,13 +1056,13 @@ fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
     {
         let controller = controller.clone();
         let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
         window.on_submit_item_form(move |title, content| {
             controller
                 .borrow_mut()
                 .submit_item_form(title.to_string(), content.to_string());
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
         });
     }
 
@@ -982,8 +1091,19 @@ fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
     {
         let controller = controller.clone();
         let weak = weak.clone();
-        window.on_confirm_delete_item(move || {
-            controller.borrow_mut().confirm_delete_item();
+        let settings_weak = settings_weak.clone();
+        window.on_save_inline_item_edit(move |_index| {
+            controller.borrow_mut().save_inline_item_edit();
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let weak = weak.clone();
+        window.on_cancel_inline_item_edit(move || {
+            controller.borrow_mut().cancel_inline_item_edit();
             if let Some(window) = weak.upgrade() {
                 controller.borrow().sync_window(&window);
             }
@@ -993,11 +1113,22 @@ fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
     {
         let controller = controller.clone();
         let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
+        window.on_confirm_delete_item(move || {
+            controller.borrow_mut().confirm_delete_item();
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
         window.on_confirm_delete_tab(move || {
             controller.borrow_mut().confirm_delete_tab();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
         });
     }
 
@@ -1006,30 +1137,6 @@ fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
         let weak = weak.clone();
         window.on_cancel_overlay(move || {
             controller.borrow_mut().cancel_overlay();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
-        window.on_toggle_launch_at_startup(move || {
-            controller.borrow_mut().toggle_launch_at_startup();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
-        window.on_update_draft_hotkey(move |value| {
-            controller
-                .borrow_mut()
-                .update_draft_hotkey(value.to_string());
             if let Some(window) = weak.upgrade() {
                 controller.borrow().sync_window(&window);
             }
@@ -1078,57 +1185,25 @@ fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
     {
         let controller = controller.clone();
         let weak = weak.clone();
-        window.on_save_hotkey(move |value| {
-            controller.borrow_mut().save_hotkey(value.to_string());
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
         window.on_copy_item(move |index| {
             controller.borrow_mut().copy_item(index as usize);
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
+            schedule_copied_toast_timeout(&controller, &weak, &settings_weak);
         });
     }
 
     {
         let controller = controller.clone();
         let weak = weak.clone();
+        let settings_weak = settings_weak.clone();
         window.on_reorder_item(move |index, position_y| {
             controller
                 .borrow_mut()
                 .reorder_item(index as usize, position_y);
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
-        window.on_trigger_import(move || {
-            controller.borrow_mut().import_config();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
-        });
-    }
-
-    {
-        let controller = controller.clone();
-        let weak = weak.clone();
-        window.on_trigger_export(move || {
-            controller.borrow_mut().export_config();
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
-            }
+            sync_main_and_settings(&controller, &weak, &settings_weak);
+            schedule_status_timeout(&controller, &weak, &settings_weak);
         });
     }
 
@@ -1142,35 +1217,237 @@ fn wire_callbacks(window: &AppWindow, controller: &Rc<RefCell<AppController>>) {
     }
 }
 
-fn toggle_window_visibility(weak: &Weak<AppWindow>) {
-    let weak = weak.clone();
+fn wire_settings_callbacks(
+    settings_window: &SettingsWindow,
+    main_window: &AppWindow,
+    controller: &Rc<RefCell<AppController>>,
+) {
+    let settings_weak = settings_window.as_weak();
+    let main_weak = main_window.as_weak();
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        let main_weak = main_weak.clone();
+        settings_window.on_start_window_drag(move || {
+            if let Some(window) = settings_weak.upgrade() {
+                controller.borrow_mut().start_window_drag(&window);
+            }
+            if let Some(window) = main_weak.upgrade() {
+                controller.borrow().sync_window(&window);
+            }
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        settings_window.on_drag_window(move || {
+            if let Some(window) = settings_weak.upgrade() {
+                controller.borrow_mut().drag_window(&window);
+            }
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        settings_window.on_end_window_drag(move || {
+            controller.borrow_mut().stop_window_drag();
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        let main_weak = main_weak.clone();
+        settings_window.on_prepare_settings(move || {
+            controller.borrow_mut().open_settings();
+            if let Some(window) = settings_weak.upgrade() {
+                controller.borrow().sync_settings_window(&window);
+            }
+            if let Some(window) = main_weak.upgrade() {
+                controller.borrow().sync_window(&window);
+            }
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        settings_window.on_close_settings(move || {
+            controller.borrow_mut().close_settings();
+            if let Some(window) = settings_weak.upgrade() {
+                controller.borrow().sync_settings_window(&window);
+                let _ = window.hide();
+            }
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        settings_window.on_begin_hotkey_recording(move || {
+            controller.borrow_mut().begin_hotkey_recording();
+            if let Some(window) = settings_weak.upgrade() {
+                controller.borrow().sync_settings_window(&window);
+            }
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        settings_window.on_end_hotkey_recording(move || {
+            controller.borrow_mut().end_hotkey_recording();
+            if let Some(window) = settings_weak.upgrade() {
+                controller.borrow().sync_settings_window(&window);
+            }
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        settings_window.on_capture_hotkey(move |key, alt, ctrl, shift| {
+            controller
+                .borrow_mut()
+                .capture_hotkey(key.to_string(), alt, ctrl, shift);
+            if let Some(window) = settings_weak.upgrade() {
+                controller.borrow().sync_settings_window(&window);
+            }
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        let main_weak = main_weak.clone();
+        settings_window.on_toggle_launch_at_startup(move || {
+            controller.borrow_mut().toggle_launch_at_startup();
+            sync_main_and_settings(&controller, &main_weak, &settings_weak);
+            schedule_status_timeout(&controller, &main_weak, &settings_weak);
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        let main_weak = main_weak.clone();
+        settings_window.on_save_hotkey(move |value| {
+            controller.borrow_mut().save_hotkey(value.to_string());
+            sync_main_and_settings(&controller, &main_weak, &settings_weak);
+            schedule_status_timeout(&controller, &main_weak, &settings_weak);
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        let main_weak = main_weak.clone();
+        settings_window.on_trigger_import(move || {
+            let imported = controller.borrow_mut().import_config();
+            if let Some(window) = settings_weak.upgrade() {
+                controller.borrow().sync_settings_window(&window);
+                if imported {
+                    let _ = window.hide();
+                }
+            }
+            if let Some(window) = main_weak.upgrade() {
+                controller.borrow().sync_window(&window);
+                if imported {
+                    let _ = show_component_window(
+                        &window,
+                        HOME_WINDOW_TITLE,
+                        (HOME_WINDOW_WIDTH, HOME_WINDOW_HEIGHT),
+                    );
+                }
+            }
+            schedule_status_timeout(&controller, &main_weak, &settings_weak);
+        });
+    }
+
+    {
+        let controller = controller.clone();
+        let settings_weak = settings_weak.clone();
+        let main_weak = main_weak.clone();
+        settings_window.on_trigger_export(move || {
+            controller.borrow_mut().export_config();
+            sync_main_and_settings(&controller, &main_weak, &settings_weak);
+            schedule_status_timeout(&controller, &main_weak, &settings_weak);
+        });
+    }
+}
+
+fn toggle_window_visibility(main_weak: &Weak<AppWindow>, settings_weak: &Weak<SettingsWindow>) {
+    let weak = main_weak.clone();
+    let settings_weak = settings_weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
+        if let Some(settings_window) = settings_weak.upgrade() {
+            let _ = settings_window.hide();
+        }
         if let Some(window) = weak.upgrade() {
             if window.window().is_visible() {
                 let _ = window.hide();
             } else {
-                let _ = window.show();
+                window.invoke_open_home();
+                let _ = show_component_window(
+                    &window,
+                    HOME_WINDOW_TITLE,
+                    (HOME_WINDOW_WIDTH, HOME_WINDOW_HEIGHT),
+                );
             }
         }
     });
 }
 
-fn show_home_from_tray(weak: &Weak<AppWindow>) {
-    let weak = weak.clone();
+fn show_home_from_tray(main_weak: &Weak<AppWindow>, settings_weak: &Weak<SettingsWindow>) {
+    let weak = main_weak.clone();
+    let settings_weak = settings_weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(window) = weak.upgrade() {
             window.invoke_open_home();
-            let _ = window.show();
+            if show_component_window(
+                &window,
+                HOME_WINDOW_TITLE,
+                (HOME_WINDOW_WIDTH, HOME_WINDOW_HEIGHT),
+            )
+            .is_ok()
+            {
+                if let Some(settings_window) = settings_weak.upgrade() {
+                    let _ = settings_window.hide();
+                }
+            }
         }
     });
 }
 
-fn show_settings_from_tray(weak: &Weak<AppWindow>) {
-    let weak = weak.clone();
+fn show_settings_from_tray(main_weak: &Weak<AppWindow>, settings_weak: &Weak<SettingsWindow>) {
+    let weak = main_weak.clone();
+    let settings_weak = settings_weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
+        if let Some(settings_window) = settings_weak.upgrade() {
+            settings_window.invoke_prepare_settings();
+            if show_component_window(
+                &settings_window,
+                SETTINGS_WINDOW_TITLE,
+                (SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT),
+            )
+            .is_ok()
+            {
+                if let Some(window) = weak.upgrade() {
+                    let _ = window.hide();
+                }
+                return;
+            }
+        }
+
         if let Some(window) = weak.upgrade() {
-            window.invoke_open_settings();
-            let _ = window.show();
+            window.invoke_open_home();
+            let _ = show_component_window(
+                &window,
+                HOME_WINDOW_TITLE,
+                (HOME_WINDOW_WIDTH, HOME_WINDOW_HEIGHT),
+            );
         }
     });
 }
@@ -1179,6 +1456,52 @@ fn quit_from_tray() {
     let _ = slint::invoke_from_event_loop(move || {
         let _ = slint::quit_event_loop();
     });
+}
+
+fn position_window_right_center<C: ComponentHandle>(window: &C, fallback_size: (i32, i32)) {
+    let Ok((left, top, right, bottom)) = current_monitor_work_area() else {
+        return;
+    };
+
+    let size = window.window().size();
+    let mut width = size.width as i32;
+    let mut height = size.height as i32;
+    if width <= 1 || height <= 1 {
+        width = fallback_size.0;
+        height = fallback_size.1;
+    }
+    let horizontal_margin = 18;
+    let min_x = left + horizontal_margin;
+    let max_x = right - width - horizontal_margin;
+    let x = if max_x >= min_x { max_x } else { min_x };
+    let max_y = bottom - height;
+    let centered_y = top + ((bottom - top - height) / 2);
+    let y = if max_y >= top {
+        centered_y.clamp(top, max_y)
+    } else {
+        top
+    };
+
+    window.window().set_position(PhysicalPosition::new(x, y));
+}
+
+fn show_component_window<C: ComponentHandle>(
+    window: &C,
+    title: &str,
+    fallback_size: (i32, i32),
+) -> Result<(), slint::PlatformError> {
+    window.window().set_minimized(false);
+    window.window().set_size(PhysicalSize::new(
+        fallback_size.0 as u32,
+        fallback_size.1 as u32,
+    ));
+    if !window.window().is_visible() {
+        window.show()?;
+    }
+    position_window_right_center(window, fallback_size);
+    let _ = apply_app_icon_to_window(title);
+    let _ = bring_window_to_front(title);
+    Ok(())
 }
 
 fn drop_target_index(position: f32, slot_size: f32, len: usize) -> usize {
@@ -1295,4 +1618,3 @@ mod tests {
         assert_eq!(hotkey, "Alt+V");
     }
 }
-

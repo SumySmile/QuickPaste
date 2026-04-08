@@ -3,8 +3,9 @@ mod windows;
 
 #[cfg(target_os = "windows")]
 pub use windows::{
-    HotkeyManager, HotkeySpec, TrayIconManager, choose_open_path, choose_save_path, confirm,
-    current_cursor_position, parse_hotkey, set_launch_at_startup,
+    HotkeyManager, HotkeySpec, SingleInstance, SingleInstanceState, TrayIconManager,
+    apply_app_icon_to_window, bring_window_to_front, choose_open_path, choose_save_path, confirm,
+    current_cursor_position, current_monitor_work_area, parse_hotkey, set_launch_at_startup,
 };
 
 #[cfg(not(target_os = "windows"))]
@@ -19,7 +20,12 @@ mod stubs {
     }
 
     pub struct HotkeyManager;
+    pub struct SingleInstance;
     pub struct TrayIconManager;
+    pub enum SingleInstanceState {
+        Primary(SingleInstance),
+        Secondary,
+    }
 
     impl HotkeyManager {
         pub fn start(
@@ -50,6 +56,14 @@ mod stubs {
         }
     }
 
+    impl SingleInstance {
+        pub fn start(
+            _on_activate: impl Fn() + Send + 'static,
+        ) -> Result<SingleInstanceState, AppError> {
+            Ok(SingleInstanceState::Primary(Self))
+        }
+    }
+
     pub fn parse_hotkey(value: &str) -> Result<HotkeySpec, AppError> {
         Ok(HotkeySpec {
             display: value.to_string(),
@@ -64,6 +78,18 @@ mod stubs {
         None
     }
 
+    pub fn bring_window_to_front(_title: &str) -> Result<(), AppError> {
+        Err(AppError::UnsupportedPlatform(
+            "Window activation is currently supported on Windows only.",
+        ))
+    }
+
+    pub fn apply_app_icon_to_window(_title: &str) -> Result<(), AppError> {
+        Err(AppError::UnsupportedPlatform(
+            "Window icons are currently supported on Windows only.",
+        ))
+    }
+
     pub fn confirm(_message: &str) -> bool {
         false
     }
@@ -71,6 +97,12 @@ mod stubs {
     pub fn current_cursor_position() -> Result<(i32, i32), AppError> {
         Err(AppError::UnsupportedPlatform(
             "Window dragging is currently supported on Windows only.",
+        ))
+    }
+
+    pub fn current_monitor_work_area() -> Result<(i32, i32, i32, i32), AppError> {
+        Err(AppError::UnsupportedPlatform(
+            "Window positioning is currently supported on Windows only.",
         ))
     }
 
@@ -83,6 +115,7 @@ mod stubs {
 
 #[cfg(not(target_os = "windows"))]
 pub use stubs::{
-    HotkeyManager, HotkeySpec, TrayIconManager, choose_open_path, choose_save_path, confirm,
-    current_cursor_position, parse_hotkey, set_launch_at_startup,
+    HotkeyManager, HotkeySpec, SingleInstance, SingleInstanceState, TrayIconManager,
+    apply_app_icon_to_window, bring_window_to_front, choose_open_path, choose_save_path, confirm,
+    current_cursor_position, current_monitor_work_area, parse_hotkey, set_launch_at_startup,
 };
