@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use arboard::Clipboard;
 use slint::{
-    CloseRequestResponse, ComponentHandle, ModelRc, PhysicalPosition, PhysicalSize, Timer, VecModel,
+    CloseRequestResponse, ComponentHandle, LogicalSize, ModelRc, PhysicalPosition, Timer, VecModel,
     Weak,
 };
 
@@ -14,7 +14,8 @@ use crate::paths::AppPaths;
 use crate::platform::{
     HotkeyManager, SingleInstance, SingleInstanceState, TrayIconManager, apply_app_icon_to_window,
     bring_window_to_front, choose_open_path, choose_save_path, confirm, current_cursor_position,
-    current_monitor_work_area, parse_hotkey, set_launch_at_startup,
+    current_monitor_scale_factor, current_monitor_work_area, current_window_rect,
+    current_window_scale_factor, current_window_work_area, parse_hotkey, set_launch_at_startup,
 };
 use crate::{AppWindow, ItemViewData, OverlayKind, SettingsWindow, TabViewData};
 
@@ -26,6 +27,7 @@ const HOME_WINDOW_WIDTH: i32 = 440;
 const HOME_WINDOW_HEIGHT: i32 = 664;
 const SETTINGS_WINDOW_WIDTH: i32 = 368;
 const SETTINGS_WINDOW_HEIGHT: i32 = 456;
+const WINDOW_SAFE_MARGIN: i32 = 16;
 
 pub fn run() -> Result<(), AppError> {
     let paths = AppPaths::discover()?;
@@ -88,13 +90,19 @@ pub fn run() -> Result<(), AppError> {
         move || quit_from_tray(),
     )?;
 
-    window.invoke_open_home();
-    show_component_window(
-        &window,
-        HOME_WINDOW_TITLE,
-        (HOME_WINDOW_WIDTH, HOME_WINDOW_HEIGHT),
-    )
-    .map_err(|err| AppError::validation(format!("Failed to show the Slint window: {err}")))?;
+    {
+        let startup_window = window.as_weak();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = startup_window.upgrade() {
+                window.invoke_open_home();
+                let _ = show_component_window(
+                    &window,
+                    HOME_WINDOW_TITLE,
+                    (HOME_WINDOW_WIDTH, HOME_WINDOW_HEIGHT),
+                );
+            }
+        });
+    }
 
     slint::run_event_loop_until_quit()
         .map_err(|err| AppError::validation(format!("Failed to run the Slint event loop: {err}")))
@@ -1458,49 +1466,180 @@ fn quit_from_tray() {
     });
 }
 
-fn position_window_right_center<C: ComponentHandle>(window: &C, fallback_size: (i32, i32)) {
-    let Ok((left, top, right, bottom)) = current_monitor_work_area() else {
-        return;
-    };
-
-    let size = window.window().size();
-    let mut width = size.width as i32;
-    let mut height = size.height as i32;
-    if width <= 1 || height <= 1 {
-        width = fallback_size.0;
-        height = fallback_size.1;
+fn fit_window_dimension(design: i32, available: i32, scale_factor: f32, outer_padding: i32) -> f32 {
+    if available <= 0 || scale_factor <= 0.0 {
+        return 1.0;
     }
-    let horizontal_margin = 18;
-    let min_x = left + horizontal_margin;
-    let max_x = right - width - horizontal_margin;
-    let x = if max_x >= min_x { max_x } else { min_x };
-    let max_y = bottom - height;
-    let centered_y = top + ((bottom - top - height) / 2);
-    let y = if max_y >= top {
-        centered_y.clamp(top, max_y)
+
+    let available_physical = (available - outer_padding).max(1) as f32;
+    let available_logical = available_physical / scale_factor;
+    let safe_margin_logical = WINDOW_SAFE_MARGIN as f32 / scale_factor;
+    let usable = if available_logical > safe_margin_logical * 2.0 {
+        available_logical - safe_margin_logical * 2.0
     } else {
-        top
+        available_logical
     };
 
-    window.window().set_position(PhysicalPosition::new(x, y));
+    (design as f32).min(usable).max(1.0)
 }
 
-fn show_component_window<C: ComponentHandle>(
+fn compute_window_size(
+    design_size: (i32, i32),
+    work_area: (i32, i32, i32, i32),
+    scale_factor: f32,
+    outer_padding: (i32, i32),
+) -> LogicalSize {
+    let work_width = (work_area.2 - work_area.0).max(1);
+    let work_height = (work_area.3 - work_area.1).max(1);
+
+    LogicalSize::new(
+        fit_window_dimension(design_size.0, work_width, scale_factor, outer_padding.0),
+        fit_window_dimension(design_size.1, work_height, scale_factor, outer_padding.1),
+    )
+}
+
+fn outer_padding_from_rect(
+    inner_size: slint::PhysicalSize,
+    outer_rect: (i32, i32, i32, i32),
+) -> (i32, i32) {
+    (
+        (outer_rect.2 - outer_rect.0 - inner_size.width as i32).max(0),
+        (outer_rect.3 - outer_rect.1 - inner_size.height as i32).max(0),
+    )
+}
+
+fn rect_size_for_logical_size(
+    logical_size: LogicalSize,
+    scale_factor: f32,
+    outer_padding: (i32, i32),
+) -> (i32, i32) {
+    let physical = logical_size.to_physical(scale_factor);
+    (
+        physical.width as i32 + outer_padding.0,
+        physical.height as i32 + outer_padding.1,
+    )
+}
+
+fn compute_preferred_window_position(
+    rect_size: (i32, i32),
+    work_area: (i32, i32, i32, i32),
+) -> PhysicalPosition {
+    let width = rect_size.0.max(1);
+    let height = rect_size.1.max(1);
+    let (_, top, right, bottom) = work_area;
+    let centered_y = top + ((bottom - top - height) / 2);
+
+    PhysicalPosition::new(right - width - WINDOW_SAFE_MARGIN, centered_y)
+}
+
+fn clamp_window_position(
+    preferred_position: PhysicalPosition,
+    rect_size: (i32, i32),
+    work_area: (i32, i32, i32, i32),
+) -> PhysicalPosition {
+    let (left, top, right, bottom) = work_area;
+    let width = rect_size.0.max(1);
+    let height = rect_size.1.max(1);
+
+    let min_x = left + WINDOW_SAFE_MARGIN;
+    let max_x = right - width - WINDOW_SAFE_MARGIN;
+    let x = if max_x >= min_x {
+        preferred_position.x.clamp(min_x, max_x)
+    } else {
+        (right - width).max(left)
+    };
+
+    let min_y = top + WINDOW_SAFE_MARGIN;
+    let max_y = bottom - height - WINDOW_SAFE_MARGIN;
+    let y = if max_y >= min_y {
+        preferred_position.y.clamp(min_y, max_y)
+    } else {
+        (bottom - height).max(top)
+    };
+
+    PhysicalPosition::new(x, y)
+}
+
+fn position_window_for_work_area(
+    rect_size: (i32, i32),
+    work_area: (i32, i32, i32, i32),
+) -> PhysicalPosition {
+    clamp_window_position(
+        compute_preferred_window_position(rect_size, work_area),
+        rect_size,
+        work_area,
+    )
+}
+
+fn show_component_window<C: ComponentHandle + 'static>(
     window: &C,
     title: &str,
     fallback_size: (i32, i32),
 ) -> Result<(), slint::PlatformError> {
+    let initial_work_area = current_monitor_work_area().ok();
+    let initial_scale_factor = current_monitor_scale_factor().ok().unwrap_or(1.0);
+    let desired_size = initial_work_area
+        .map(|area| compute_window_size(fallback_size, area, initial_scale_factor, (0, 0)))
+        .unwrap_or_else(|| {
+            LogicalSize::new(fallback_size.0.max(1) as f32, fallback_size.1.max(1) as f32)
+        });
+
     window.window().set_minimized(false);
-    window.window().set_size(PhysicalSize::new(
-        fallback_size.0 as u32,
-        fallback_size.1 as u32,
-    ));
+    window.window().set_size(desired_size);
+    if let Some(area) = initial_work_area {
+        let desired_physical_size = desired_size.to_physical(initial_scale_factor);
+        window.window().set_position(position_window_for_work_area(
+            (
+                desired_physical_size.width as i32,
+                desired_physical_size.height as i32,
+            ),
+            area,
+        ));
+    }
     if !window.window().is_visible() {
         window.show()?;
     }
-    position_window_right_center(window, fallback_size);
+
     let _ = apply_app_icon_to_window(title);
     let _ = bring_window_to_front(title);
+
+    let actual_work_area = current_window_work_area(title)
+        .ok()
+        .flatten()
+        .or(initial_work_area);
+    let actual_scale_factor = current_window_scale_factor(title)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| window.window().scale_factor().max(1.0));
+
+    if let Some(area) = actual_work_area {
+        let current_inner_size = window.window().size();
+        let observed_outer_padding = current_window_rect(title)
+            .ok()
+            .flatten()
+            .map(|rect| outer_padding_from_rect(current_inner_size, rect))
+            .unwrap_or((0, 0));
+        let corrected_size = compute_window_size(
+            fallback_size,
+            area,
+            actual_scale_factor,
+            observed_outer_padding,
+        );
+        let current_size = LogicalSize::from_physical(current_inner_size, actual_scale_factor);
+        if (current_size.width - corrected_size.width).abs() > 0.5
+            || (current_size.height - corrected_size.height).abs() > 0.5
+        {
+            window.window().set_size(corrected_size);
+        }
+
+        let rect_size =
+            rect_size_for_logical_size(corrected_size, actual_scale_factor, observed_outer_padding);
+
+        window
+            .window()
+            .set_position(position_window_for_work_area(rect_size, area));
+    }
+
     Ok(())
 }
 
@@ -1605,7 +1744,12 @@ fn preview_text(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_hotkey_candidate, normalize_hotkey_key};
+    use slint::{LogicalSize, PhysicalPosition};
+
+    use super::{
+        build_hotkey_candidate, clamp_window_position, compute_preferred_window_position,
+        compute_window_size, normalize_hotkey_key, position_window_for_work_area,
+    };
 
     #[test]
     fn normalize_hotkey_key_accepts_single_letter() {
@@ -1616,5 +1760,54 @@ mod tests {
     fn build_hotkey_candidate_uses_modifier_flags() {
         let hotkey = build_hotkey_candidate("v", true, false, false).expect("Alt+V should build");
         assert_eq!(hotkey, "Alt+V");
+    }
+
+    #[test]
+    fn compute_window_size_preserves_design_when_work_area_is_large() {
+        let size = compute_window_size((440, 664), (0, 0, 1920, 1080), 1.0, (0, 0));
+        assert_eq!(size, LogicalSize::new(440.0, 664.0));
+    }
+
+    #[test]
+    fn compute_window_size_shrinks_to_fit_work_area() {
+        let size = compute_window_size((440, 664), (0, 0, 360, 500), 1.0, (0, 0));
+        assert_eq!(size, LogicalSize::new(328.0, 468.0));
+    }
+
+    #[test]
+    fn compute_window_size_preserves_design_in_scaled_physical_work_area() {
+        let size = compute_window_size((440, 664), (0, 0, 1920, 1080), 1.25, (0, 0));
+        assert_eq!(size, LogicalSize::new(440.0, 664.0));
+    }
+
+    #[test]
+    fn compute_window_size_accounts_for_outer_padding() {
+        let size = compute_window_size((440, 664), (0, 0, 360, 500), 1.0, (0, 24));
+        assert_eq!(size, LogicalSize::new(328.0, 444.0));
+    }
+
+    #[test]
+    fn compute_preferred_window_position_anchors_to_right_center() {
+        let position = compute_preferred_window_position((440, 664), (0, 0, 1200, 900));
+        assert_eq!(position.x, 744);
+        assert_eq!(position.y, 118);
+    }
+
+    #[test]
+    fn clamp_window_position_keeps_rect_inside_work_area() {
+        let position = clamp_window_position(
+            PhysicalPosition::new(900, -50),
+            (440, 664),
+            (0, 0, 1200, 900),
+        );
+        assert_eq!(position.x, 744);
+        assert_eq!(position.y, 16);
+    }
+
+    #[test]
+    fn position_window_for_work_area_uses_actual_rect_size() {
+        let position = position_window_for_work_area((470, 664), (0, 0, 1200, 900));
+        assert_eq!(position.x, 714);
+        assert_eq!(position.y, 118);
     }
 }

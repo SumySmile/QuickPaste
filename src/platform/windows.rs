@@ -8,10 +8,11 @@ use std::time::Duration;
 
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, HINSTANCE,
-    HWND, LPARAM, LRESULT, POINT, WPARAM,
+    HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
+    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    MonitorFromWindow,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{
@@ -19,13 +20,14 @@ use windows::Win32::System::Registry::{
     RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW,
 };
 use windows::Win32::System::Threading::{
-    AttachThreadInput, CreateEventW, CreateMutexW, GetCurrentThreadId, INFINITE, SetEvent,
-    WaitForSingleObject,
+    AttachThreadInput, CreateEventW, CreateMutexW, GetCurrentProcessId, GetCurrentThreadId,
+    INFINITE, SetEvent, WaitForSingleObject,
 };
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, GetSaveFileNameW, OFN_FILEMUSTEXIST, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
     OPENFILENAMEW,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, RegisterHotKey, SetActiveWindow, SetFocus,
     UnregisterHotKey, VK_F1,
@@ -36,16 +38,16 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, CREATESTRUCTW,
     CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-    FindWindowW, GWLP_USERDATA, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW,
-    GetWindowThreadProcessId, ICON_BIG, ICON_SMALL, IDI_APPLICATION, LoadIconW,
-    MB_ICONQUESTION, MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PM_NOREMOVE, PM_REMOVE,
-    PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW, SW_RESTORE, SW_SHOW,
-    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY,
-    WM_RBUTTONUP, WM_SETICON, WNDCLASSW, WS_OVERLAPPED,
+    EnumWindows, FindWindowW, GWLP_USERDATA, GetCursorPos, GetForegroundWindow, GetMessageW,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, ICON_BIG, ICON_SMALL, IDI_APPLICATION, LoadIconW, MB_ICONQUESTION,
+    MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PM_NOREMOVE, PM_REMOVE, PeekMessageW, PostMessageW,
+    PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+    ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
+    WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NCCREATE,
+    WM_NCDESTROY, WM_RBUTTONUP, WM_SETICON, WNDCLASSW, WS_OVERLAPPED,
 };
-use windows::core::{PCWSTR, PWSTR, w};
+use windows::core::{BOOL, PCWSTR, PWSTR, w};
 
 use crate::error::AppError;
 
@@ -61,6 +63,12 @@ const RUN_KEY_PATH: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE_NAME: &str = "MyQuickPaste";
 const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\MyQuickPasteSlintMutex";
 const SINGLE_INSTANCE_EVENT_NAME: &str = "Local\\MyQuickPasteSlintActivateEvent";
+
+struct WindowLookup {
+    target_pid: u32,
+    target_title: String,
+    hwnd: Option<HWND>,
+}
 
 #[derive(Clone, Debug)]
 pub struct HotkeySpec {
@@ -396,26 +404,23 @@ pub fn current_monitor_work_area() -> Result<(i32, i32, i32, i32), AppError> {
     unsafe {
         let mut point = POINT::default();
         let _ = GetCursorPos(&mut point);
-        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTOPRIMARY);
-        let mut monitor_info = MONITORINFO {
-            cbSize: size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        work_area_for_monitor(monitor)
+    }
+}
 
-        if !GetMonitorInfoW(monitor, &mut monitor_info).as_bool() {
-            return Err(AppError::validation("Failed to read monitor work area."));
-        }
-
-        let work = monitor_info.rcWork;
-        Ok((work.left, work.top, work.right, work.bottom))
+pub fn current_monitor_scale_factor() -> Result<f32, AppError> {
+    unsafe {
+        let mut point = POINT::default();
+        let _ = GetCursorPos(&mut point);
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        scale_factor_for_monitor(monitor)
     }
 }
 
 pub fn bring_window_to_front(title: &str) -> Result<(), AppError> {
-    let title = wide(title);
-
     unsafe {
-        let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) else {
+        let Some(hwnd) = resolve_process_window(title) else {
             return Ok(());
         };
 
@@ -432,7 +437,6 @@ pub fn bring_window_to_front(title: &str) -> Result<(), AppError> {
         }
 
         let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = ShowWindow(hwnd, SW_RESTORE);
         let _ = BringWindowToTop(hwnd);
         let _ = SetActiveWindow(hwnd);
         let _ = SetFocus(Some(hwnd));
@@ -447,10 +451,8 @@ pub fn bring_window_to_front(title: &str) -> Result<(), AppError> {
 }
 
 pub fn apply_app_icon_to_window(title: &str) -> Result<(), AppError> {
-    let title = wide(title);
-
     unsafe {
-        let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) else {
+        let Some(hwnd) = resolve_process_window(title) else {
             return Ok(());
         };
 
@@ -472,6 +474,33 @@ pub fn apply_app_icon_to_window(title: &str) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+pub fn current_window_rect(title: &str) -> Result<Option<(i32, i32, i32, i32)>, AppError> {
+    let Some(hwnd) = resolve_process_window(title) else {
+        return Ok(None);
+    };
+
+    Ok(Some(window_rect_from_handle(hwnd)?))
+}
+
+pub fn current_window_work_area(title: &str) -> Result<Option<(i32, i32, i32, i32)>, AppError> {
+    let Some(hwnd) = resolve_process_window(title) else {
+        return Ok(None);
+    };
+
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        Ok(Some(work_area_for_monitor(monitor)?))
+    }
+}
+
+pub fn current_window_scale_factor(title: &str) -> Result<Option<f32>, AppError> {
+    let Some(hwnd) = resolve_process_window(title) else {
+        return Ok(None);
+    };
+
+    Ok(Some(scale_factor_for_window(hwnd)?))
 }
 
 pub fn set_launch_at_startup(enabled: bool) -> Result<(), AppError> {
@@ -683,6 +712,98 @@ fn notify_running_instance_activate() -> Result<(), AppError> {
         }
     }
     Ok(())
+}
+
+unsafe extern "system" fn enum_window_for_current_process(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let lookup = unsafe { &mut *(lparam.0 as *mut WindowLookup) };
+    let mut window_pid = 0u32;
+    let _ = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut window_pid)) };
+    if window_pid != lookup.target_pid {
+        return true.into();
+    }
+
+    let title_length = unsafe { GetWindowTextLengthW(hwnd) };
+    if title_length <= 0 {
+        return true.into();
+    }
+
+    let mut title = vec![0u16; title_length as usize + 1];
+    let written = unsafe { GetWindowTextW(hwnd, &mut title) };
+    if written <= 0 {
+        return true.into();
+    }
+
+    if String::from_utf16_lossy(&title[..written as usize]) == lookup.target_title {
+        lookup.hwnd = Some(hwnd);
+        return false.into();
+    }
+
+    true.into()
+}
+
+fn resolve_process_window(title: &str) -> Option<HWND> {
+    let mut lookup = WindowLookup {
+        target_pid: unsafe { GetCurrentProcessId() },
+        target_title: title.to_string(),
+        hwnd: None,
+    };
+
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_window_for_current_process),
+            LPARAM((&mut lookup as *mut WindowLookup) as isize),
+        );
+    }
+
+    lookup.hwnd
+}
+
+fn work_area_for_monitor(monitor: HMONITOR) -> Result<(i32, i32, i32, i32), AppError> {
+    unsafe {
+        let mut monitor_info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+
+        if !GetMonitorInfoW(monitor, &mut monitor_info).as_bool() {
+            return Err(AppError::validation("Failed to read monitor work area."));
+        }
+
+        let work = monitor_info.rcWork;
+        Ok((work.left, work.top, work.right, work.bottom))
+    }
+}
+
+fn window_rect_from_handle(hwnd: HWND) -> Result<(i32, i32, i32, i32), AppError> {
+    unsafe {
+        let mut rect = RECT::default();
+        GetWindowRect(hwnd, &mut rect)
+            .map_err(|err| AppError::validation(format!("Failed to read window bounds: {err}")))?;
+
+        Ok((rect.left, rect.top, rect.right, rect.bottom))
+    }
+}
+
+fn scale_factor_for_monitor(monitor: HMONITOR) -> Result<f32, AppError> {
+    unsafe {
+        let mut dpi_x = 96u32;
+        let mut dpi_y = 96u32;
+        GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y)
+            .map_err(|err| AppError::validation(format!("Failed to read monitor DPI: {err}")))?;
+        Ok((dpi_x as f32 / 96.0).max(1.0))
+    }
+}
+
+fn scale_factor_for_window(hwnd: HWND) -> Result<f32, AppError> {
+    unsafe {
+        let dpi = GetDpiForWindow(hwnd);
+        if dpi == 0 {
+            let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            return scale_factor_for_monitor(monitor);
+        }
+
+        Ok((dpi as f32 / 96.0).max(1.0))
+    }
 }
 
 fn tray_state(hwnd: HWND) -> Option<&'static TrayWindowState> {

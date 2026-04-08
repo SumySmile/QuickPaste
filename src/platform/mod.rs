@@ -5,7 +5,9 @@ mod windows;
 pub use windows::{
     HotkeyManager, HotkeySpec, SingleInstance, SingleInstanceState, TrayIconManager,
     apply_app_icon_to_window, bring_window_to_front, choose_open_path, choose_save_path, confirm,
-    current_cursor_position, current_monitor_work_area, parse_hotkey, set_launch_at_startup,
+    current_cursor_position, current_monitor_scale_factor, current_monitor_work_area,
+    current_window_rect, current_window_scale_factor, current_window_work_area, parse_hotkey,
+    set_launch_at_startup,
 };
 
 #[cfg(not(target_os = "windows"))]
@@ -106,6 +108,32 @@ mod stubs {
         ))
     }
 
+    pub fn current_monitor_scale_factor() -> Result<f32, AppError> {
+        Err(AppError::UnsupportedPlatform(
+            "Window DPI is currently supported on Windows only.",
+        ))
+    }
+
+    pub fn current_window_rect(_title: &str) -> Result<Option<(i32, i32, i32, i32)>, AppError> {
+        Err(AppError::UnsupportedPlatform(
+            "Window bounds are currently supported on Windows only.",
+        ))
+    }
+
+    pub fn current_window_work_area(
+        _title: &str,
+    ) -> Result<Option<(i32, i32, i32, i32)>, AppError> {
+        Err(AppError::UnsupportedPlatform(
+            "Window work area is currently supported on Windows only.",
+        ))
+    }
+
+    pub fn current_window_scale_factor(_title: &str) -> Result<Option<f32>, AppError> {
+        Err(AppError::UnsupportedPlatform(
+            "Window DPI is currently supported on Windows only.",
+        ))
+    }
+
     pub fn set_launch_at_startup(_enabled: bool) -> Result<(), AppError> {
         Err(AppError::UnsupportedPlatform(
             "Launch at startup is currently supported on Windows only.",
@@ -117,5 +145,7 @@ mod stubs {
 pub use stubs::{
     HotkeyManager, HotkeySpec, SingleInstance, SingleInstanceState, TrayIconManager,
     apply_app_icon_to_window, bring_window_to_front, choose_open_path, choose_save_path, confirm,
-    current_cursor_position, current_monitor_work_area, parse_hotkey, set_launch_at_startup,
+    current_cursor_position, current_monitor_scale_factor, current_monitor_work_area,
+    current_window_rect, current_window_scale_factor, current_window_work_area, parse_hotkey,
+    set_launch_at_startup,
 };

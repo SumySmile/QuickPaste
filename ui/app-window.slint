@@ -878,14 +878,14 @@ export component AppWindow inherits Window {
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: transparent;
+        background: #00000000;
 
         Rectangle {
-            x: 12px;
-            y: 12px;
-            width: parent.width - 24px;
-            height: parent.height - 24px;
-            border-radius: 28px;
+            x: 8px;
+            y: 8px;
+            width: parent.width - 16px;
+            height: parent.height - 16px;
+            border-radius: 24px;
             border-width: 1px;
             border-color: Theme.panel-border;
             background: Theme.surface-bg;
@@ -1494,14 +1494,14 @@ export component SettingsWindow inherits Window {
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: transparent;
+        background: #00000000;
 
         Rectangle {
-            x: 12px;
-            y: 12px;
-            width: parent.width - 24px;
-            height: parent.height - 24px;
-            border-radius: 28px;
+            x: 8px;
+            y: 8px;
+            width: parent.width - 16px;
+            height: parent.height - 16px;
+            border-radius: 24px;
             border-width: 1px;
             border-color: Theme.panel-border;
             background: Theme.surface-bg;
@@ -1580,151 +1580,168 @@ export component SettingsWindow inherits Window {
                     }
                 }
 
-                Rectangle {
+                ScrollView {
                     width: parent.width;
-                    height: 78px;
-                    background: transparent;
+                    vertical-stretch: 1;
+                    horizontal-scrollbar-policy: always-off;
+                    vertical-scrollbar-policy: as-needed;
 
-                    Text {
-                        text: "Hotkey";
-                        x: 8px;
-                        y: 6px;
-                        color: Theme.text-primary;
-                        font-size: 13px;
-                        font-weight: 700;
-                        height: 16px;
-                    }
-
-                    HStack {
-                        x: 8px;
-                        y: 32px;
-                        width: parent.width - 16px;
-                        height: 38px;
-                        spacing: 8px;
-
-                        HotkeyCaptureField {
-                            text: root.draft-hotkey;
-                            recording: root.hotkey-recording;
-                            horizontal-stretch: 1;
-                            start-recording => { root.begin-hotkey-recording(); }
-                            stop-recording => { root.end-hotkey-recording(); }
-                            capture-hotkey(key, alt, ctrl, shift) => { root.capture-hotkey(key, alt, ctrl, shift); }
-                        }
-
-                        TextButton {
-                            text: "Save";
-                            width: 76px;
-                            primary: true;
-                            clicked => { root.save-hotkey(root.draft-hotkey); }
-                        }
-                    }
-                }
-
-                SoftSectionDivider {
-                    x: 8px;
-                    width: parent.width - 16px;
-                }
-
-                Rectangle {
-                    width: parent.width;
-                    height: 64px;
-                    background: transparent;
-
-                    Text {
-                        text: "Startup";
-                        x: 8px;
-                        y: 6px;
-                        color: Theme.text-primary;
-                        font-size: 13px;
-                        font-weight: 700;
-                        height: 16px;
-                    }
-
-                    HStack {
-                        x: 8px;
-                        y: 24px;
-                        width: parent.width - 16px;
-                        height: 30px;
+                    VStack {
+                        width: parent.width - 2px;
                         spacing: 10px;
 
                         Rectangle {
-                            horizontal-stretch: 1;
+                            width: parent.width;
+                            height: 78px;
+                            background: transparent;
+
+                            Text {
+                                text: "Hotkey";
+                                x: 8px;
+                                y: 6px;
+                                color: Theme.text-primary;
+                                font-size: 13px;
+                                font-weight: 700;
+                                height: 16px;
+                            }
+
+                            HStack {
+                                x: 8px;
+                                y: 32px;
+                                width: parent.width - 16px;
+                                height: 38px;
+                                spacing: 8px;
+
+                                HotkeyCaptureField {
+                                    text: root.draft-hotkey;
+                                    recording: root.hotkey-recording;
+                                    horizontal-stretch: 1;
+                                    start-recording => { root.begin-hotkey-recording(); }
+                                    stop-recording => { root.end-hotkey-recording(); }
+                                    capture-hotkey(key, alt, ctrl, shift) => { root.capture-hotkey(key, alt, ctrl, shift); }
+                                }
+
+                                TextButton {
+                                    text: "Save";
+                                    width: 76px;
+                                    primary: true;
+                                    clicked => { root.save-hotkey(root.draft-hotkey); }
+                                }
+                            }
+                        }
+
+                        SoftSectionDivider {
+                            x: 8px;
+                            width: parent.width - 16px;
+                        }
+
+                        Rectangle {
+                            width: parent.width;
+                            height: 64px;
+                            background: transparent;
+
+                            Text {
+                                text: "Startup";
+                                x: 8px;
+                                y: 6px;
+                                color: Theme.text-primary;
+                                font-size: 13px;
+                                font-weight: 700;
+                                height: 16px;
+                            }
+
+                            HStack {
+                                x: 8px;
+                                y: 24px;
+                                width: parent.width - 16px;
+                                height: 30px;
+                                spacing: 10px;
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: transparent;
+                                }
+
+                                ToggleSwitch {
+                                    checked: root.launch-at-startup;
+                                    toggled => { root.toggle-launch-at-startup(); }
+                                }
+                            }
+                        }
+
+                        SoftSectionDivider {
+                            x: 8px;
+                            width: parent.width - 16px;
+                        }
+
+                        Rectangle {
+                            width: parent.width;
+                            height: 96px;
+                            background: transparent;
+
+                            Text {
+                                text: "Config";
+                                x: 8px;
+                                y: 6px;
+                                color: Theme.text-primary;
+                                font-size: 13px;
+                                font-weight: 700;
+                                height: 16px;
+                            }
+
+                            HStack {
+                                x: 8px;
+                                y: 32px;
+                                width: parent.width - 16px;
+                                height: 38px;
+                                spacing: 10px;
+
+                                TextButton {
+                                    text: "Import";
+                                    horizontal-stretch: 1;
+                                    clicked => { root.trigger-import(); }
+                                }
+
+                                TextButton {
+                                    text: "Export";
+                                    horizontal-stretch: 1;
+                                    clicked => { root.trigger-export(); }
+                                }
+                            }
+
+                            Text {
+                                text: "Import replaces local config.";
+                                x: 8px;
+                                y: 78px;
+                                width: parent.width - 16px;
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                height: 14px;
+                            }
+                        }
+
+                        if root.status-text != "" : Rectangle {
+                            width: parent.width;
+                            height: 22px;
+                            border-radius: 11px;
+                            background: root.status-is-error ? Theme.danger-bg : Theme.info-bg;
+
+                            Text {
+                                text: root.status-text;
+                                x: 10px;
+                                width: parent.width - 20px;
+                                height: parent.height;
+                                color: root.status-is-error ? #b44758 : Theme.info-text;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 4px;
                             background: transparent;
                         }
-
-                        ToggleSwitch {
-                            checked: root.launch-at-startup;
-                            toggled => { root.toggle-launch-at-startup(); }
-                        }
-                    }
-                }
-
-                SoftSectionDivider {
-                    x: 8px;
-                    width: parent.width - 16px;
-                }
-
-                Rectangle {
-                    width: parent.width;
-                    height: 96px;
-                    background: transparent;
-
-                    Text {
-                        text: "Config";
-                        x: 8px;
-                        y: 6px;
-                        color: Theme.text-primary;
-                        font-size: 13px;
-                        font-weight: 700;
-                        height: 16px;
-                    }
-
-                    HStack {
-                        x: 8px;
-                        y: 32px;
-                        width: parent.width - 16px;
-                        height: 38px;
-                        spacing: 10px;
-
-                        TextButton {
-                            text: "Import";
-                            horizontal-stretch: 1;
-                            clicked => { root.trigger-import(); }
-                        }
-
-                        TextButton {
-                            text: "Export";
-                            horizontal-stretch: 1;
-                            clicked => { root.trigger-export(); }
-                        }
-                    }
-
-                    Text {
-                        text: "Import replaces local config.";
-                        x: 8px;
-                        y: 78px;
-                        width: parent.width - 16px;
-                        color: Theme.text-secondary;
-                        font-size: 11px;
-                        height: 14px;
-                    }
-                }
-
-                if root.status-text != "" : Rectangle {
-                    width: parent.width;
-                    height: 22px;
-                    border-radius: 11px;
-                    background: root.status-is-error ? Theme.danger-bg : Theme.info-bg;
-
-                    Text {
-                        text: root.status-text;
-                        x: 10px;
-                        width: parent.width - 20px;
-                        height: parent.height;
-                        color: root.status-is-error ? #b44758 : Theme.info-text;
-                        font-size: 11px;
-                        vertical-alignment: center;
-                        overflow: elide;
                     }
                 }
             }

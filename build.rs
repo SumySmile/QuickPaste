@@ -6,6 +6,7 @@ use image::imageops::FilterType;
 fn main() {
     println!("cargo:rerun-if-changed=ui/app-window.slint");
     println!("cargo:rerun-if-changed=assets/CopyPasteIcon.png");
+    println!("cargo:rerun-if-changed=assets/windows-app.manifest");
 
     let config = slint_build::CompilerConfiguration::new().with_style("fluent".into());
     slint_build::compile_with_config("ui/app-window.slint", config).unwrap();
@@ -16,6 +17,7 @@ fn main() {
         let icon_path = generated_icon.to_string_lossy();
         res.set_icon(icon_path.as_ref());
         res.set_icon_with_id(icon_path.as_ref(), "32512");
+        res.set_manifest_file("assets/windows-app.manifest");
         res.compile().unwrap();
     }
 }
