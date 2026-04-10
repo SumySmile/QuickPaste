@@ -1168,11 +1168,19 @@ fn wire_callbacks(
         let controller = controller.clone();
         let weak = weak.clone();
         window.on_update_draft_item_title(move |value| {
-            controller
-                .borrow_mut()
-                .update_draft_item_title(value.to_string());
-            if let Some(window) = weak.upgrade() {
-                controller.borrow().sync_window(&window);
+            let should_sync_window = {
+                let mut controller = controller.borrow_mut();
+                controller.update_draft_item_title(value.to_string());
+                // Avoid rebuilding the item list while inline-renaming a card title.
+                // Re-syncing the whole window on every keystroke resets the active
+                // TextInput state and sends the caret back to the beginning.
+                controller.editing_item_index.is_none()
+            };
+
+            if should_sync_window {
+                if let Some(window) = weak.upgrade() {
+                    controller.borrow().sync_window(&window);
+                }
             }
         });
     }

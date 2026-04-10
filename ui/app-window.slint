@@ -255,6 +255,7 @@ component CompactTextField inherits Rectangle {
 
     focus-input => {
         input.focus();
+        input.set-selection-offsets(2147483647, 2147483647);
     }
 
     input := TextInput {
@@ -909,23 +910,6 @@ export component AppWindow inherits Window {
                         border-radius: 16px;
                         background: transparent;
 
-                        TouchArea {
-                            width: parent.width - 44px;
-                            height: parent.height;
-                            moved => {
-                                if (self.pressed) {
-                                    root.drag-window();
-                                }
-                            }
-                            changed pressed => {
-                                if (self.pressed) {
-                                    root.start-window-drag();
-                                } else {
-                                    root.end-window-drag();
-                                }
-                            }
-                        }
-
                         Text {
                             text: "Quick Paste";
                             x: 14px;
@@ -947,6 +931,25 @@ export component AppWindow inherits Window {
                             font-size: 10px;
                             height: 12px;
                             overflow: elide;
+                        }
+
+                        TouchArea {
+                            x: -18px;
+                            y: -18px;
+                            width: parent.width + 36px;
+                            height: header-zone.height + 18px;
+                            moved => {
+                                if (self.pressed) {
+                                    root.drag-window();
+                                }
+                            }
+                            changed pressed => {
+                                if (self.pressed) {
+                                    root.start-window-drag();
+                                } else {
+                                    root.end-window-drag();
+                                }
+                            }
                         }
 
                         BareCloseButton {
@@ -1525,23 +1528,6 @@ export component SettingsWindow inherits Window {
                         border-radius: 16px;
                         background: transparent;
 
-                        TouchArea {
-                            width: parent.width - 44px;
-                            height: parent.height;
-                            moved => {
-                                if (self.pressed) {
-                                    root.drag-window();
-                                }
-                            }
-                            changed pressed => {
-                                if (self.pressed) {
-                                    root.start-window-drag();
-                                } else {
-                                    root.end-window-drag();
-                                }
-                            }
-                        }
-
                         Text {
                             text: "Settings";
                             x: 14px;
@@ -1563,6 +1549,25 @@ export component SettingsWindow inherits Window {
                             font-size: 10px;
                             height: 12px;
                             overflow: elide;
+                        }
+
+                        TouchArea {
+                            x: -18px;
+                            y: -18px;
+                            width: parent.width + 36px;
+                            height: header-zone.height + 18px;
+                            moved => {
+                                if (self.pressed) {
+                                    root.drag-window();
+                                }
+                            }
+                            changed pressed => {
+                                if (self.pressed) {
+                                    root.start-window-drag();
+                                } else {
+                                    root.end-window-drag();
+                                }
+                            }
                         }
 
                         BareCloseButton {
