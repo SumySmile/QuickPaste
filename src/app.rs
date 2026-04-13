@@ -19,7 +19,7 @@ use crate::platform::{
 };
 use crate::{AppWindow, ItemViewData, OverlayKind, SettingsWindow, TabViewData};
 
-const TAB_DROP_SLOT_WIDTH: f32 = 80.0;
+const TAB_DROP_SLOT_WIDTH: f32 = 72.0;
 const ITEM_DROP_SLOT_HEIGHT: f32 = 80.0;
 const HOME_WINDOW_TITLE: &str = "Quick Paste";
 const SETTINGS_WINDOW_TITLE: &str = "Quick Paste Settings";
